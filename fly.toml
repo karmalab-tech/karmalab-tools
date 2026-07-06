@@ -1,34 +1,31 @@
-# fly.io configuration for KarmaLab Tools
+# fly.toml app configuration file generated for tools-9dc2aw on 2026-07-06T12:11:14Z
 #
-# First-time setup:
-#   fly launch --no-deploy   # (or `fly apps create karmalab-tools`)
-#   fly deploy
+# See https://fly.io/docs/reference/configuration/ for information about how to use this file.
 #
-# Update the app name below to whatever you register on fly.io.
 
-app = "karmalab-tools"
-primary_region = "cdg"
+app = 'tools-9dc2aw'
+primary_region = 'cdg'
 
 [build]
-  dockerfile = "Dockerfile"
+  dockerfile = 'Dockerfile'
 
 [env]
-  PORT = "8080"
+  PORT = '8080'
 
 [http_service]
   internal_port = 8080
   force_https = true
-  auto_stop_machines = "stop"
+  auto_stop_machines = 'stop'
   auto_start_machines = true
   min_machines_running = 0
 
   [[http_service.checks]]
-    interval = "15s"
-    timeout = "2s"
-    grace_period = "5s"
-    method = "GET"
-    path = "/healthz"
+    interval = '15s'
+    timeout = '2s'
+    grace_period = '5s'
+    method = 'GET'
+    path = '/healthz'
 
 [[vm]]
-  size = "shared-cpu-1x"
-  memory = "256mb"
+  size = 'shared-cpu-1x'
+  memory = '256mb'
