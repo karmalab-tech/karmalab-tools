@@ -1,0 +1,29 @@
+{
+  "name": "karmalab-tools",
+  "version": "1.0.0",
+  "description": "KarmaLab Tools — a multi-page web app of small React tools, built with Vite and served (with a Replicate proxy) by a small Node server.",
+  "type": "module",
+  "main": "server/index.js",
+  "license": "MIT",
+  "packageManager": "yarn@1.22.22",
+  "engines": {
+    "node": ">=18.11"
+  },
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview",
+    "start": "node server/index.js"
+  },
+  "dependencies": {
+    "jszip": "^3.10.1",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1"
+  },
+  "devDependencies": {
+    "@tailwindcss/vite": "^4.3.2",
+    "@vitejs/plugin-react": "^4.3.4",
+    "tailwindcss": "^4.3.2",
+    "vite": "^6.0.7"
+  }
+}

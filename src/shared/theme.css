@@ -1,0 +1,55 @@
+/*
+ * KarmaLab shared theme — the Tailwind entry point.
+ *
+ * The design tokens live in `@theme` so Tailwind generates matching utilities
+ * (e.g. `bg-panel`, `text-text-dim`, `border-panel-border`, `font-mono`). This
+ * file is imported once via the shared components barrel, so every tool pulls
+ * in Tailwind plus the KarmaLab tokens from a single import.
+ */
+
+@import 'tailwindcss';
+
+@theme {
+  --color-bg: #000000;
+  --color-panel: #171717;
+  --color-panel-alt: #101010;
+  --color-panel-border: #2a2a2a;
+  --color-text: #ffffff;
+  --color-text-dim: #8a8a8a;
+  --color-accent: #e44db8;
+  --color-accent-dim: rgba(228, 77, 184, 0.12);
+  --color-success: #4ddb84;
+  --color-success-dim: rgba(77, 219, 132, 0.12);
+  --color-error: #ff6161;
+  --color-error-dim: rgba(255, 97, 97, 0.12);
+
+  --font-sans: 'Space Grotesk', sans-serif;
+  --font-mono: 'JetBrains Mono', monospace;
+
+  --animate-klb-spin: klb-spin 0.7s linear infinite;
+  --animate-klb-pulse: klb-pulse 1s ease-in-out infinite;
+}
+
+@layer base {
+  body {
+    background: var(--color-bg);
+    color: var(--color-text);
+    font-family: var(--font-sans);
+  }
+}
+
+@keyframes klb-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@keyframes klb-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.3;
+  }
+}
