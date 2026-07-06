@@ -28,9 +28,12 @@ export const MODEL_CONFIGS = {
     label: 'OpenAI · GPT Image 2',
     aspectField: 'aspect_ratio',
     aspectOptions: [
+      { value: 'auto', label: 'Auto' },
       { value: '1:1', label: 'Square · 1:1' },
       { value: '3:2', label: 'Landscape · 3:2' },
       { value: '2:3', label: 'Portrait · 2:3' },
+      { value: '16:9', label: 'Widescreen · 16:9' },
+      { value: '9:16', label: 'Vertical · 9:16' },
     ],
     imageField: 'input_images',
     imageIsArray: true,
@@ -44,8 +47,6 @@ export const MODEL_CONFIGS = {
         help: 'GPT Image models on Replicate are billed through your own OpenAI account.',
       },
     ],
-    aspectNote:
-      'OpenAI\'s API only offers these 3 fixed ratios — no true 16:9 or 9:16 for this model.',
   },
   'openai/gpt-image-1': {
     label: 'OpenAI · GPT Image 1',
