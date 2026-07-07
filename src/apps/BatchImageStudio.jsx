@@ -1,14 +1,19 @@
-import { useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Brand, Button, Input, Panel, Spinner } from '../shared/components';
 import { MODEL_CONFIGS, MODEL_KEYS, EXTRA_FIELD_KEYS } from './batch/models.js';
 import {
   MAX_CONCURRENT,
   buildInput,
   createPrediction,
+  getPrediction,
   pollPrediction,
   extractImageUrl,
 } from './batch/replicate.js';
-import { loadKey, saveKey } from './batch/storage.js';
+import { addJob, loadJobs, loadKey, removeJob, saveKey } from './batch/storage.js';
+
+// Replicate status → the UI's status vocabulary (queued / running / …).
+const uiStatus = (status) =>
+  status === 'processing' ? 'running' : status === 'starting' ? 'queued' : status;
 
 // Shared field styling reused across the native <label>/<select>/<textarea>
 // controls (the ones not covered by the shared Input component).
@@ -188,6 +193,79 @@ export default function BatchImageStudio() {
     setResults((prev) => prev.map((r) => (r.id === id ? { ...r, ...patch } : r)));
   }
 
+  // On open: if a token is saved and there are pending predictions from a
+  // previous session, load them back (with their prompts) and resume tracking
+  // any that are still in flight. Results are keyed by prediction id here so a
+  // fresh Generate run (keyed r1, r2, …) never collides with a restored one.
+  useEffect(() => {
+    const key = loadKey('replicateToken').trim();
+    const jobs = loadJobs();
+    if (!key || !jobs.length) return;
+
+    let stopped = false;
+
+    setResults((prev) => {
+      const known = new Set(prev.map((r) => r.id));
+      const restored = jobs
+        .filter((j) => !known.has(j.predictionId))
+        .map((j) => ({
+          id: j.predictionId,
+          prompt: j.prompt,
+          status: 'running',
+          imageUrl: null,
+          error: null,
+        }));
+      return restored.length ? [...prev, ...restored] : prev;
+    });
+
+    async function resume(job) {
+      const id = job.predictionId;
+      try {
+        const data = await getPrediction(id, key);
+        if (data.status === 'succeeded') {
+          const imageUrl = extractImageUrl(data.output);
+          updateResult(
+            id,
+            imageUrl
+              ? { status: 'succeeded', imageUrl }
+              : { status: 'failed', error: 'No image returned by the model.' }
+          );
+          removeJob(id);
+          return;
+        }
+        if (data.status === 'failed' || data.status === 'canceled') {
+          updateResult(id, { status: 'failed', error: data.error || `Prediction ${data.status}` });
+          removeJob(id);
+          return;
+        }
+        // Still queued/running on Replicate — reflect it and resume polling.
+        updateResult(id, { status: uiStatus(data.status) });
+        const finalData = await pollPrediction(id, key, () => stopped);
+        if (stopped) return;
+        const imageUrl = extractImageUrl(finalData.output);
+        updateResult(
+          id,
+          imageUrl
+            ? { status: 'succeeded', imageUrl }
+            : { status: 'failed', error: 'No image returned by the model.' }
+        );
+        removeJob(id);
+      } catch (err) {
+        if (stopped) return;
+        // Leave the job stored so a later reload can retry (e.g. transient
+        // network/proxy errors); just surface the problem on the card.
+        updateResult(id, { status: 'failed', error: err.message || 'Could not load this job.' });
+      }
+    }
+
+    jobs.forEach(resume);
+    return () => {
+      stopped = true;
+    };
+    // Run once on mount.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   async function handleGenerate() {
     if (isRunning) return;
     if (!apiKey.trim()) {
@@ -225,13 +303,20 @@ export default function BatchImageStudio() {
         return false;
       }
       updateResult(item.id, { status: 'running' });
+      let predictionId = null;
       try {
         const input = buildInput(cfg, { promptText: item.prompt, ...snapshot });
         const prediction = await createPrediction(modelId, input, key);
-        const finalData = await pollPrediction(prediction.id, key, () => cancelRef.current);
+        predictionId = prediction.id;
+        // Persist the in-flight prediction so it can be recovered if the tab is
+        // closed before it finishes; the result carries its id for the same run.
+        addJob({ predictionId, prompt: item.prompt });
+        updateResult(item.id, { predictionId });
+        const finalData = await pollPrediction(predictionId, key, () => cancelRef.current);
         const imageUrl = extractImageUrl(finalData.output);
         if (!imageUrl) throw new Error('No image returned by the model.');
         updateResult(item.id, { status: 'succeeded', imageUrl });
+        removeJob(predictionId);
         return true;
       } catch (err) {
         let message = err.message || 'Something went wrong.';
@@ -240,6 +325,9 @@ export default function BatchImageStudio() {
             'Request blocked before reaching Replicate — almost always the proxy. Make sure you are on the dev server (yarn dev) or the built server (yarn start).';
         }
         updateResult(item.id, { status: 'failed', error: message });
+        // A UI cancel only stops our polling — the prediction is still running on
+        // Replicate, so keep the job to resume it next time. Real failures are done.
+        if (predictionId && !cancelRef.current) removeJob(predictionId);
         return false;
       }
     }

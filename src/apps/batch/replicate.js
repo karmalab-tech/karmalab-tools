@@ -45,6 +45,17 @@ export async function createPrediction(modelId, input, apiKey) {
   return data;
 }
 
+// Fetch a prediction's current state once (no polling). Used to load pending
+// jobs back when the app reopens.
+export async function getPrediction(predictionId, apiKey) {
+  const resp = await fetch(`/v1/predictions/${predictionId}`, {
+    headers: { Authorization: `Bearer ${apiKey}` },
+  });
+  const data = await resp.json().catch(() => ({}));
+  if (!resp.ok) throw new Error((data && (data.detail || data.error)) || `HTTP ${resp.status}`);
+  return data;
+}
+
 export async function pollPrediction(predictionId, apiKey, shouldCancel) {
   const pollUrl = `/v1/predictions/${predictionId}`;
   const start = Date.now();
