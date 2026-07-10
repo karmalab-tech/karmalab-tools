@@ -22,6 +22,8 @@
   --color-success-dim: rgba(77, 219, 132, 0.12);
   --color-error: #ff6161;
   --color-error-dim: rgba(255, 97, 97, 0.12);
+  --color-warning: #f0b429;
+  --color-warning-dim: rgba(240, 180, 41, 0.12);
 
   --font-sans: 'Space Grotesk', sans-serif;
   --font-mono: 'JetBrains Mono', monospace;

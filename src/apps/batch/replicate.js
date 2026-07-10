@@ -1,12 +1,17 @@
-// Replicate API helpers for the Batch Image Studio.
-//
-// All requests are same-origin (relative `/v1/...`): in dev Vite proxies them
-// to Replicate, in production the Node server does. Either way there is no
-// cross-origin request from the browser, so no CORS problem.
+// Batch-specific Replicate input assembly. The generic API helpers (create /
+// poll / fetch predictions) live in src/shared/replicate.js and are shared
+// with the Continuous Video Studio — re-exported here so the Batch Studio
+// keeps a single import site.
 
-export const MAX_CONCURRENT = 3;
-export const POLL_INTERVAL_MS = 1500;
-export const POLL_TIMEOUT_MS = 5 * 60 * 1000;
+export {
+  MAX_CONCURRENT,
+  POLL_INTERVAL_MS,
+  POLL_TIMEOUT_MS,
+  createPrediction,
+  getPrediction,
+  pollPrediction,
+  extractOutputUrl as extractImageUrl,
+} from '../../shared/replicate.js';
 
 // Assemble the Replicate `input` object for one prompt from a config snapshot.
 export function buildInput(cfg, { promptText, suffix, aspect, referenceImageDataUri, extraValues }) {
@@ -26,61 +31,4 @@ export function buildInput(cfg, { promptText, suffix, aspect, referenceImageData
   });
 
   return input;
-}
-
-export async function createPrediction(modelId, input, apiKey) {
-  const resp = await fetch(`/v1/models/${modelId}/predictions`, {
-    method: 'POST',
-    headers: {
-      Authorization: `Bearer ${apiKey}`,
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify({ input }),
-  });
-  const data = await resp.json().catch(() => ({}));
-  if (!resp.ok) {
-    const msg = (data && (data.detail || data.error || JSON.stringify(data))) || `HTTP ${resp.status}`;
-    throw new Error(msg);
-  }
-  return data;
-}
-
-// Fetch a prediction's current state once (no polling). Used to load pending
-// jobs back when the app reopens.
-export async function getPrediction(predictionId, apiKey) {
-  const resp = await fetch(`/v1/predictions/${predictionId}`, {
-    headers: { Authorization: `Bearer ${apiKey}` },
-  });
-  const data = await resp.json().catch(() => ({}));
-  if (!resp.ok) throw new Error((data && (data.detail || data.error)) || `HTTP ${resp.status}`);
-  return data;
-}
-
-export async function pollPrediction(predictionId, apiKey, shouldCancel) {
-  const pollUrl = `/v1/predictions/${predictionId}`;
-  const start = Date.now();
-  while (true) {
-    if (shouldCancel()) throw new Error('Cancelled');
-    const resp = await fetch(pollUrl, { headers: { Authorization: `Bearer ${apiKey}` } });
-    const data = await resp.json().catch(() => ({}));
-    if (!resp.ok) throw new Error((data && (data.detail || data.error)) || `HTTP ${resp.status}`);
-    if (data.status === 'succeeded') return data;
-    if (data.status === 'failed' || data.status === 'canceled') {
-      throw new Error(data.error || `Prediction ${data.status}`);
-    }
-    if (Date.now() - start > POLL_TIMEOUT_MS) {
-      throw new Error('Timed out waiting for the prediction to finish.');
-    }
-    await new Promise((r) => setTimeout(r, POLL_INTERVAL_MS));
-  }
-}
-
-export function extractImageUrl(output) {
-  if (!output) return null;
-  if (typeof output === 'string') return output;
-  if (Array.isArray(output)) return output[0];
-  if (typeof output === 'object' && output.url) {
-    return typeof output.url === 'function' ? output.url() : output.url;
-  }
-  return null;
 }
