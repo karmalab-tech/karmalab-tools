@@ -20,7 +20,7 @@ import {
   STATUS_PILL,
 } from '../shared/fields.js';
 import { useUnloadGuard } from '../shared/useUnloadGuard.js';
-import { loadApiKey, saveApiKey } from '../shared/apiKey.js';
+import { loadApiKey } from '../shared/apiKey.js';
 import { createPrediction, pollPrediction, extractOutputUrl } from '../shared/replicate.js';
 import { MODEL_CONFIGS, MODEL_KEYS, buildVideoInput, defaultOptionValues } from './video/models.js';
 import { extractFrame, fetchVideoBlob } from './video/frames.js';
@@ -195,11 +195,6 @@ export default function ContinuousVideoStudio() {
   // The chain lives in this tab: closing it loses the blobs and the end frame
   // the next clip would start from. Intercept close/reload while it's going.
   useUnloadGuard(chainActive);
-
-  function updateApiKey(value) {
-    setApiKey(value);
-    saveApiKey(value.trim());
-  }
 
   function changeModel(nextKey) {
     setModelKey(nextKey);
@@ -639,8 +634,7 @@ export default function ContinuousVideoStudio() {
 
       <ApiKeyModal
         open={keyModalOpen}
-        value={apiKey}
-        onChange={updateApiKey}
+        onSaved={() => setApiKey(loadApiKey())}
         onClose={() => setKeyModalOpen(false)}
       />
     </div>

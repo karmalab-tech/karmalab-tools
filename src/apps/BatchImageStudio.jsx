@@ -20,7 +20,7 @@ import {
   STATUS_PILL,
 } from '../shared/fields.js';
 import { useUnloadGuard } from '../shared/useUnloadGuard.js';
-import { loadApiKey, saveApiKey } from '../shared/apiKey.js';
+import { loadApiKey, loadOpenaiKey } from '../shared/apiKey.js';
 import { MODEL_CONFIGS, MODEL_KEYS, EXTRA_FIELD_KEYS } from './batch/models.js';
 import {
   MAX_CONCURRENT,
@@ -114,6 +114,7 @@ function ResultCard({ result }) {
 
 export default function BatchImageStudio() {
   const [apiKey, setApiKey] = useState(() => loadApiKey());
+  const [openaiKey, setOpenaiKey] = useState(() => loadOpenaiKey());
   const [keyModalOpen, setKeyModalOpen] = useState(false);
   const [modelKey, setModelKey] = useState(MODEL_KEYS[0]);
   const [aspect, setAspect] = useState(() => firstAspect(MODEL_KEYS[0]));
@@ -141,9 +142,9 @@ export default function BatchImageStudio() {
   // results that were never persisted are not).
   useUnloadGuard(isRunning);
 
-  function updateApiKey(value) {
-    setApiKey(value);
-    saveApiKey(value.trim());
+  function refreshKeys() {
+    setApiKey(loadApiKey());
+    setOpenaiKey(loadOpenaiKey());
   }
 
   function changeModel(nextKey) {
@@ -240,6 +241,12 @@ export default function BatchImageStudio() {
       setKeyModalOpen(true);
       return;
     }
+    const needsOpenaiKey = (cfg.extraFields || []).some((f) => f.type === 'apiKey');
+    if (needsOpenaiKey && !openaiKey.trim()) {
+      setRunHint({ text: 'This model needs your OpenAI API key — add it first.', isError: true });
+      setKeyModalOpen(true);
+      return;
+    }
     if (!prompts.length) {
       setRunHint({ text: 'Add at least one prompt.', isError: true });
       return;
@@ -262,7 +269,9 @@ export default function BatchImageStudio() {
       suffix,
       aspect,
       referenceImageDataUri: referenceImage?.dataUri || null,
-      extraValues,
+      // The OpenAI key lives in the shared key storage, not extraValues —
+      // merge it in so buildInput picks it up like any other extra field.
+      extraValues: { ...extraValues, openai_api_key: openaiKey },
     };
 
     async function runOne(item) {
@@ -418,14 +427,31 @@ export default function BatchImageStudio() {
               <label className={LABEL} htmlFor={`extra_${f.key}`}>
                 {f.label}
               </label>
-              <Input
-                id={`extra_${f.key}`}
-                revealable={f.type === 'password'}
-                type={f.type || 'text'}
-                placeholder={f.placeholder || ''}
-                value={extraValues[f.key] || ''}
-                onChange={(e) => updateExtra(f.key, e.target.value)}
-              />
+              {f.type === 'apiKey' ? (
+                <button
+                  type="button"
+                  id={`extra_${f.key}`}
+                  onClick={() => setKeyModalOpen(true)}
+                  className={`${CONTROL} cursor-pointer text-left inline-flex items-center gap-2.5 hover:border-accent ${
+                    openaiKey.trim() ? '' : 'text-text-dim'
+                  }`}
+                >
+                  <span
+                    className={`w-1.5 h-1.5 rounded-full inline-block shrink-0 ${
+                      openaiKey.trim() ? 'bg-success' : 'bg-error'
+                    }`}
+                  />
+                  {openaiKey.trim() ? 'OpenAI API key set — manage in API keys' : 'Add your OpenAI API key…'}
+                </button>
+              ) : (
+                <Input
+                  id={`extra_${f.key}`}
+                  type={f.type || 'text'}
+                  placeholder={f.placeholder || ''}
+                  value={extraValues[f.key] || ''}
+                  onChange={(e) => updateExtra(f.key, e.target.value)}
+                />
+              )}
               {f.help && <div className={FIELD_HELP}>{f.help}</div>}
             </div>
           ))}
@@ -529,8 +555,7 @@ export default function BatchImageStudio() {
 
       <ApiKeyModal
         open={keyModalOpen}
-        value={apiKey}
-        onChange={updateApiKey}
+        onSaved={refreshKeys}
         onClose={() => setKeyModalOpen(false)}
       />
     </div>

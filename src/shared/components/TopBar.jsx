@@ -39,7 +39,7 @@ export function TopBar({ active, apiKeySet, onApiKeyClick }) {
             apiKeySet ? 'bg-success' : 'bg-error'
           }`}
         />
-        API key
+        API keys
       </button>
     </div>
   );
