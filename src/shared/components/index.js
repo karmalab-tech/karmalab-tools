@@ -10,3 +10,5 @@ export { Button } from './Button.jsx';
 export { Panel } from './Panel.jsx';
 export { Brand } from './Brand.jsx';
 export { ImageDrop } from './ImageDrop.jsx';
+export { TopBar } from './TopBar.jsx';
+export { ApiKeyModal } from './ApiKeyModal.jsx';

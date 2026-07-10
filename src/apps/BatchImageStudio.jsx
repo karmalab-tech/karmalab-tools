@@ -1,5 +1,14 @@
 import { useEffect, useRef, useState } from 'react';
-import { Brand, Button, ImageDrop, Input, Panel, Spinner } from '../shared/components';
+import {
+  ApiKeyModal,
+  Brand,
+  Button,
+  ImageDrop,
+  Input,
+  Panel,
+  Spinner,
+  TopBar,
+} from '../shared/components';
 import {
   CONTROL,
   FIELD,
@@ -11,6 +20,7 @@ import {
   STATUS_PILL,
 } from '../shared/fields.js';
 import { useUnloadGuard } from '../shared/useUnloadGuard.js';
+import { loadApiKey, saveApiKey } from '../shared/apiKey.js';
 import { MODEL_CONFIGS, MODEL_KEYS, EXTRA_FIELD_KEYS } from './batch/models.js';
 import {
   MAX_CONCURRENT,
@@ -103,7 +113,8 @@ function ResultCard({ result }) {
 }
 
 export default function BatchImageStudio() {
-  const [apiKey, setApiKey] = useState(() => loadKey('replicateToken'));
+  const [apiKey, setApiKey] = useState(() => loadApiKey());
+  const [keyModalOpen, setKeyModalOpen] = useState(false);
   const [modelKey, setModelKey] = useState(MODEL_KEYS[0]);
   const [aspect, setAspect] = useState(() => firstAspect(MODEL_KEYS[0]));
   const [extraValues, setExtraValues] = useState(() =>
@@ -132,7 +143,7 @@ export default function BatchImageStudio() {
 
   function updateApiKey(value) {
     setApiKey(value);
-    saveKey('replicateToken', value.trim());
+    saveApiKey(value.trim());
   }
 
   function changeModel(nextKey) {
@@ -154,7 +165,7 @@ export default function BatchImageStudio() {
   // any that are still in flight. Results are keyed by prediction id here so a
   // fresh Generate run (keyed r1, r2, …) never collides with a restored one.
   useEffect(() => {
-    const key = loadKey('replicateToken').trim();
+    const key = loadApiKey().trim();
     const jobs = loadJobs();
     if (!key || !jobs.length) return;
 
@@ -226,6 +237,7 @@ export default function BatchImageStudio() {
     if (isRunning) return;
     if (!apiKey.trim()) {
       setRunHint({ text: 'Add your Replicate API token first.', isError: true });
+      setKeyModalOpen(true);
       return;
     }
     if (!prompts.length) {
@@ -350,29 +362,15 @@ export default function BatchImageStudio() {
   return (
     <div className="flex justify-center px-5 pt-10 pb-20">
       <div className="w-full max-w-225 flex flex-col gap-5">
+        <TopBar
+          active="/"
+          apiKeySet={!!apiKey.trim()}
+          onApiKeyClick={() => setKeyModalOpen(true)}
+        />
         <Brand
           title="Batch Image Studio"
           subtitle="Paste a list of prompts, pick a model, generate them all in parallel."
         />
-
-        <Panel title="Replicate API token">
-          <div className={FIELD}>
-            <Input
-              revealable
-              value={apiKey}
-              placeholder="r8_••••••••••••••••••••••••••••••••"
-              onChange={(e) => updateApiKey(e.target.value)}
-            />
-            <div className={FIELD_HELP}>
-              Saved in this browser's local storage so you don't have to re-enter it — never sent
-              anywhere but Replicate. Get a token at{' '}
-              <a href="https://replicate.com/account/api-tokens" target="_blank" rel="noreferrer">
-                replicate.com/account/api-tokens
-              </a>
-              .
-            </div>
-          </div>
-        </Panel>
 
         <Panel title="Generation settings">
           <div className="grid grid-cols-1 min-[620px]:grid-cols-2 gap-4">
@@ -528,6 +526,13 @@ export default function BatchImageStudio() {
           )}
         </Panel>
       </div>
+
+      <ApiKeyModal
+        open={keyModalOpen}
+        value={apiKey}
+        onChange={updateApiKey}
+        onClose={() => setKeyModalOpen(false)}
+      />
     </div>
   );
 }

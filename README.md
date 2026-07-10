@@ -6,7 +6,7 @@ Replicate API.
 
 - **Batch Image Studio** (`/`) — generates one image per text prompt via
   Replicate, in batch.
-- **Continuous Video Studio** (`/video`) — chains video clips via Replicate:
+- **Continuous Video Studio** (`/video-chain`) — chains video clips via Replicate:
   each clip starts from the last frame of the previous one.
 - **Prompt Box** (`/prompt`) — a styled mockup.
 
@@ -20,8 +20,9 @@ yarn build    # build both tools to dist/
 yarn start    # run the Node server on dist/ (build first)
 ```
 
-`yarn dev` serves `/`, `/video` and `/prompt` on port 5173. Paste a Replicate
-token in the Batch Studio or Video Studio (remembered in `localStorage`).
+`yarn dev` serves `/`, `/video-chain` and `/prompt` on port 5173. Add a
+Replicate token via the "API key" button in the top bar (remembered in
+`localStorage`, shared by all tools).
 
 ## How it works
 

@@ -1,5 +1,14 @@
 import { useRef, useState } from 'react';
-import { Brand, Button, ImageDrop, Input, Panel, Spinner } from '../shared/components';
+import {
+  ApiKeyModal,
+  Brand,
+  Button,
+  ImageDrop,
+  Input,
+  Panel,
+  Spinner,
+  TopBar,
+} from '../shared/components';
 import {
   CONTROL,
   FIELD,
@@ -11,10 +20,10 @@ import {
   STATUS_PILL,
 } from '../shared/fields.js';
 import { useUnloadGuard } from '../shared/useUnloadGuard.js';
+import { loadApiKey, saveApiKey } from '../shared/apiKey.js';
 import { createPrediction, pollPrediction, extractOutputUrl } from '../shared/replicate.js';
 import { MODEL_CONFIGS, MODEL_KEYS, buildVideoInput, defaultOptionValues } from './video/models.js';
 import { extractFrame, fetchVideoBlob } from './video/frames.js';
-import { loadKey, saveKey } from './video/storage.js';
 
 // Video predictions run much longer than image ones — poll slower, wait longer.
 const VIDEO_POLL = { intervalMs: 3000, timeoutMs: 30 * 60 * 1000 };
@@ -158,7 +167,8 @@ function ClipCard({ clip }) {
 }
 
 export default function ContinuousVideoStudio() {
-  const [apiKey, setApiKey] = useState(() => loadKey('replicateToken'));
+  const [apiKey, setApiKey] = useState(() => loadApiKey());
+  const [keyModalOpen, setKeyModalOpen] = useState(false);
   const [modelKey, setModelKey] = useState(MODEL_KEYS[0]);
   const [optionValues, setOptionValues] = useState(() => defaultOptionValues(MODEL_KEYS[0]));
   const [prompt, setPrompt] = useState('');
@@ -188,7 +198,7 @@ export default function ContinuousVideoStudio() {
 
   function updateApiKey(value) {
     setApiKey(value);
-    saveKey('replicateToken', value.trim());
+    saveApiKey(value.trim());
   }
 
   function changeModel(nextKey) {
@@ -300,6 +310,7 @@ export default function ContinuousVideoStudio() {
     const key = apiKey.trim();
     if (!key) {
       setRunHint({ text: 'Add your Replicate API token first.', isError: true });
+      setKeyModalOpen(true);
       return;
     }
     if (!prompt.trim()) {
@@ -399,29 +410,15 @@ export default function ContinuousVideoStudio() {
   return (
     <div className="flex justify-center px-5 pt-10 pb-20">
       <div className="w-full max-w-225 flex flex-col gap-5">
+        <TopBar
+          active="/video-chain"
+          apiKeySet={!!apiKey.trim()}
+          onApiKeyClick={() => setKeyModalOpen(true)}
+        />
         <Brand
           title="Continuous Video Studio"
           subtitle="Chain video clips — each one starts from the last frame of the previous."
         />
-
-        <Panel title="Replicate API token">
-          <div className={FIELD}>
-            <Input
-              revealable
-              value={apiKey}
-              placeholder="r8_••••••••••••••••••••••••••••••••"
-              onChange={(e) => updateApiKey(e.target.value)}
-            />
-            <div className={FIELD_HELP}>
-              Saved in this browser's local storage so you don't have to re-enter it — never sent
-              anywhere but Replicate. Get a token at{' '}
-              <a href="https://replicate.com/account/api-tokens" target="_blank" rel="noreferrer">
-                replicate.com/account/api-tokens
-              </a>
-              .
-            </div>
-          </div>
-        </Panel>
 
         <Panel title="Generation settings">
           <div className={FIELD}>
@@ -639,6 +636,13 @@ export default function ContinuousVideoStudio() {
           )}
         </Panel>
       </div>
+
+      <ApiKeyModal
+        open={keyModalOpen}
+        value={apiKey}
+        onChange={updateApiKey}
+        onClose={() => setKeyModalOpen(false)}
+      />
     </div>
   );
 }
