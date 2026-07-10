@@ -8,7 +8,9 @@
 //   imageField    — Replicate input key for a reference image, or null if unsupported
 //   imageIsArray  — whether that field expects [dataUri] vs a bare dataUri string
 //   extraInput    — static extra fields always sent (e.g. { quality: 'high' })
-//   extraFields   — user-fillable extra inputs rendered dynamically
+//   extraFields   — user-fillable extra inputs rendered dynamically. A field
+//                   with type 'apiKey' is managed by the shared ApiKeyModal —
+//                   the tool renders a button that opens it instead of an input
 //
 // To add a model, add one entry here — the UI rebuilds itself from it.
 
@@ -42,8 +44,7 @@ export const MODEL_CONFIGS = {
       {
         key: 'openai_api_key',
         label: 'OpenAI API key',
-        type: 'password',
-        placeholder: 'sk-••••••••••••••••',
+        type: 'apiKey',
         help: 'GPT Image models on Replicate are billed through your own OpenAI account.',
       },
     ],
@@ -63,8 +64,7 @@ export const MODEL_CONFIGS = {
       {
         key: 'openai_api_key',
         label: 'OpenAI API key',
-        type: 'password',
-        placeholder: 'sk-••••••••••••••••',
+        type: 'apiKey',
         help: 'GPT Image models on Replicate are billed through your own OpenAI account.',
       },
     ],
@@ -119,9 +119,13 @@ export const MODEL_CONFIGS = {
 
 export const MODEL_KEYS = Object.keys(MODEL_CONFIGS);
 
-// Every distinct extra-field key across all models (used to preload saved keys).
+// Every distinct extra-field key across all models (used to preload saved
+// values). apiKey-type fields are excluded — they live in the shared key
+// storage (src/shared/apiKey.js), not the tool's namespace.
 export const EXTRA_FIELD_KEYS = [
   ...new Set(
-    MODEL_KEYS.flatMap((k) => (MODEL_CONFIGS[k].extraFields || []).map((f) => f.key))
+    MODEL_KEYS.flatMap((k) =>
+      (MODEL_CONFIGS[k].extraFields || []).filter((f) => f.type !== 'apiKey').map((f) => f.key)
+    )
   ),
 ];
