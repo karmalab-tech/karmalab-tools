@@ -73,6 +73,7 @@ export default function PromptBox() {
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault();
       send();
+      textareaRef.current?.blur();
     }
   }
 
