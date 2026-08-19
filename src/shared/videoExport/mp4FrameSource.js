@@ -4,8 +4,12 @@
 // through to the output file without re-encoding.
 //
 // The file is read in slices and demuxing pauses while the sample queue is
-// deep, so memory stays bounded even for long videos. Known limitation:
-// rotation metadata (common in phone footage) is not applied.
+// deep, so memory stays bounded even for long videos.
+//
+// Rotation metadata (phone footage): decoders output unrotated frames because
+// rotation lives in the container's track matrix, so it's read from there and
+// baked in — each decoded frame is drawn rotated onto a canvas and re-wrapped,
+// and the reported width/height are the display (rotated) dimensions.
 
 import { createFile, DataStream, Endianness, MP4BoxBuffer } from 'mp4box';
 
@@ -24,6 +28,17 @@ function videoDescription(trak) {
     }
   }
   return undefined;
+}
+
+// Clockwise display rotation (0/90/180/270) from the track's transformation
+// matrix (16.16 fixed point: [a, b, u, c, d, v, x, y, w]).
+function trackRotation(track) {
+  const m = track.matrix;
+  if (!m) return 0;
+  const a = m[0] / 65536;
+  const b = m[1] / 65536;
+  const deg = ((Math.round((Math.atan2(b, a) * 180) / Math.PI) % 360) + 360) % 360;
+  return deg === 90 || deg === 180 || deg === 270 ? deg : 0;
 }
 
 // AudioSpecificConfig from the esds box — the decoderConfig.description the
@@ -97,6 +112,12 @@ export async function createMp4FrameSource(file) {
   const frameCount = vTrack.nb_samples;
   const fps = frameCount / (vTrack.duration / vTrack.timescale || duration || 1);
 
+  const rotation = trackRotation(vTrack);
+  const codedW = vTrack.video.width;
+  const codedH = vTrack.video.height;
+  const outW = rotation % 180 ? codedH : codedW;
+  const outH = rotation % 180 ? codedW : codedH;
+
   const audio = aTrack
     ? {
         codec: aTrack.codec,
@@ -149,6 +170,31 @@ export async function createMp4FrameSource(file) {
 
   const vTimescale = vTrack.timescale;
 
+  // Bake the container rotation into the pixels so consumers never see it.
+  let rotCanvas = null;
+  let rotCtx = null;
+  const orient = (frame) => {
+    if (!rotation) return frame;
+    if (!rotCanvas) {
+      rotCanvas =
+        typeof OffscreenCanvas !== 'undefined'
+          ? new OffscreenCanvas(outW, outH)
+          : Object.assign(document.createElement('canvas'), { width: outW, height: outH });
+      rotCtx = rotCanvas.getContext('2d');
+    }
+    rotCtx.save();
+    rotCtx.translate(outW / 2, outH / 2);
+    rotCtx.rotate((rotation * Math.PI) / 180);
+    rotCtx.drawImage(frame, -codedW / 2, -codedH / 2);
+    rotCtx.restore();
+    const rotated = new VideoFrame(rotCanvas, {
+      timestamp: frame.timestamp,
+      duration: frame.duration ?? undefined,
+    });
+    frame.close();
+    return rotated;
+  };
+
   async function* frames(signal) {
     const out = [];
     let decodeError = null;
@@ -174,7 +220,7 @@ export async function createMp4FrameSource(file) {
           }));
           poke(); // the pump may be waiting for the sample queue to drain
         }
-        if (out.length) { yield out.shift(); continue; }
+        if (out.length) { yield orient(out.shift()); continue; }
         if (pumpDone && !videoSamples.length && !decodeError) {
           if (!flushed) { flushed = true; await decoder.flush().catch(() => {}); continue; }
           if (!out.length) break;
@@ -189,8 +235,9 @@ export async function createMp4FrameSource(file) {
 
   return {
     kind: 'webcodecs',
-    width: vTrack.video.width,
-    height: vTrack.video.height,
+    width: outW,
+    height: outH,
+    rotation,
     fps,
     frameCount,
     duration,
