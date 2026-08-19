@@ -1,15 +1,13 @@
 # AGENTS.md — KarmaLab Tools
 
-Orientation for coding agents. The full reasoning lives in
-[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) — read it before any non-trivial
-change, and keep it updated when you change the shape of things. Contributor
-workflow is in [CONTRIBUTING.md](CONTRIBUTING.md); don't duplicate either here.
+Orientation for coding agents, and the architecture notes for anyone else.
+Contributor workflow is in [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## What this is
 
-A multi-page web app: a collection of browser-based tools for generating images
-and video with Replicate models, built with **React + Vite** and served by a small
-Node server that also proxies the Replicate API.
+A multi-page web app: browser-based tools for generating images and video with
+Replicate models, built with **React + Vite** and served by a small Node server
+that also proxies the Replicate API.
 
 - **Batch Image Studio** (`/`) — one image per text prompt, in batch. The
   flagship tool.
@@ -42,20 +40,87 @@ Node server that also proxies the Replicate API.
    there appears in each). The UI rebuilds itself from it; don't special-case a
    model in component code.
 6. **Adding a tool is three edits**: an HTML entry at the root, an input in
-   `vite.config.js`, an entry in `server/routes.js`. `server/routes.js` is the
-   source of truth for which tools exist.
+   `vite.config.js`, an entry in `server/routes.js`, which is the source of truth
+   for which tools exist.
 
-## Where things are
+## Routing lives on the backend
 
-`src/entries/` mounts each tool · `src/apps/` the tools, with per-tool logic in
-`src/apps/batch/`, `src/apps/batchVideo/` and `src/apps/video/` · `src/shared/`
-the shared component library and helpers, including `videoModels.js` and
-`storage.js` (`createToolStorage(namespace)`), both shared across tools ·
-`server/` the Node server, its proxy policy and route table · `test/` Vitest
-suites · `docs/` architecture notes and screenshots.
+Each tool is a separate Vite HTML entry with its own JS bundle; there is no
+client-side router. The tools are genuinely independent — no shared shell, no
+cross-tool state — so this keeps each bundle small (the heavy Batch Studio
+JavaScript never loads on the Prompt Box) and lets the server own routing.
+`vite build` emits `dist/`; `server/routes.js` maps clean routes to the built
+HTML.
+
+## Layout
+
+- `index.html` / `batch-videos.html` / `video-chain.html` / `prompt.html` —
+  Vite HTML entries, each loading a script from `src/entries/`.
+- `src/apps/` — the tools. Per-tool logic in `src/apps/batch/` (`models.js`,
+  `replicate.js`, `storage.js`), `src/apps/batchVideo/` (`items.js`,
+  `storage.js`) and `src/apps/video/` (`frames.js` — end-frame extraction via
+  off-screen `<video>` + canvas).
+- `src/shared/` — what the tools are built from: `theme.css` (the Tailwind
+  entry — `@theme` tokens, base styles, keyframes), `components/` (import from
+  `src/shared/components`, which also pulls in `theme.css`), `replicate.js`
+  (prediction create / poll / output helpers, the longer polling profile video
+  needs, and `friendlyErrorMessage()`), `videoModels.js` (video model catalogue
+  and input assembly, shared by both video tools), `storage.js`
+  (`createToolStorage(namespace)` — namespaced `localStorage` plus
+  pending-prediction persistence, one prefix per tool), `apiKey.js`, `fields.js`,
+  `useUnloadGuard.js`.
+- `server/` — `index.js` (serves `dist/`, proxies Replicate), `proxy.js` (the
+  proxy's request policy), `routes.js` (the route table).
+- `test/` Vitest suites · `docs/` a README screenshot · `Dockerfile` + `fly.toml`
+  fly.io deployment.
 
 Anything two tools need goes in `src/shared/`, namespaced per tool where it
 touches storage — never reached for across `src/apps/`.
+
+## What the proxy allows, and why
+
+`api.replicate.com` sends no CORS headers, so the proxy is what makes any call
+work. The Replicate token is passed through from the browser and never stored
+server-side — that is what makes the app usable without accounts, and also its
+main limitation: a deployed instance is reachable by anyone, so `server/proxy.js`
+bounds it.
+
+1. **Request allowlist** — only the two calls above; everything else gets a 403.
+2. **Header allowlist** — only `authorization`, `content-type`, `accept` go
+   upstream. An allowlist rather than a denylist means `cookie` is dropped by
+   construction rather than by remembering to delete it. `Set-Cookie` is stripped
+   from responses.
+3. **Body cap and rate limit** — bodies are capped (reference images are base64
+   and are not downscaled in the browser, so the cap has to be generous), and
+   requests are counted per client in a fixed window, keyed off `fly-client-ip`
+   or the socket address, never a client-supplied `X-Forwarded-For`, which anyone
+   could rotate to reset their bucket. The limiter is in-process, so it bounds
+   one machine; a multi-machine deployment should rate limit at the edge.
+
+The stronger design is to hold a token server-side and authenticate your own
+users, at which point the proxy stops being an anonymous relay. That is a
+different product — accounts, billing, quotas — which is why this repo hasn't
+gone there.
+
+## Testing
+
+`yarn test` runs Vitest in the `node` environment, stubbing the browser globals
+the modules touch (`localStorage`, `fetch`). Covered: the proxy's request policy,
+the prediction polling loop, per-model input assembly for images and video,
+namespaced storage and pending-job recovery, and the Batch Video run-item
+flattening including its download filename stems.
+
+`src/apps/video/frames.js` has **no** automated coverage — jsdom can't decode
+video, so a test there would assert nothing meaningful; it wants a Playwright
+test. It's the subtlest code in the repo, so changes need manual verification in
+a real browser, and say so rather than implying tests cover it.
+
+One ESLint choice worth knowing: `eslint.config.js` enables
+`react-hooks/rules-of-hooks` and `exhaustive-deps` by name rather than spreading
+the plugin's `recommended` preset, which now also carries the React Compiler
+rules. This codebase hydrates state from `localStorage` inside mount effects,
+which `set-state-in-effect` flags but which is what effects are for. Revisit if
+the compiler is adopted.
 
 ## Before you claim you're done
 
@@ -63,7 +128,4 @@ touches storage — never reached for across `src/apps/`.
 yarn lint && yarn format:check && yarn test && yarn build
 ```
 
-That is exactly what CI runs. Note that `src/apps/video/frames.js` has **no**
-automated coverage — jsdom can't decode video — so changes there need manual
-verification in a real browser, and you should say so rather than implying tests
-cover it.
+That is exactly what CI runs.

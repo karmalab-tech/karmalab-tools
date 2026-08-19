@@ -1,8 +1,0 @@
-blank_issues_enabled: true
-contact_links:
-  - name: Security vulnerability
-    url: https://github.com/karmalab-tech/karmalab-tools/security/advisories/new
-    about: Report privately instead of opening a public issue.
-  - name: Replicate model or API problem
-    url: https://replicate.com/docs
-    about: Errors from a model itself, or from Replicate's API, belong with Replicate.

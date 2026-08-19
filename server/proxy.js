@@ -16,7 +16,13 @@
 //   3. Request bodies are capped, and requests are rate limited per client.
 //
 // The stronger fix is to stop taking the token from the browser at all: hold it
-// server-side and authenticate your own users. See docs/ARCHITECTURE.md.
+// server-side and authenticate your own users. See AGENTS.md.
+//
+// Tunable by environment variable, each documented at its definition below:
+//   PROXY_MAX_BODY_BYTES        max proxied request body   (default 24 MB)
+//   PROXY_RATE_LIMIT_MAX        requests per window        (default 300)
+//   PROXY_RATE_LIMIT_WINDOW_MS  the window                (default 60_000)
+//   TRUST_PROXY_HEADER          honour X-Forwarded-For     (default off)
 
 export const REPLICATE_HOST = 'api.replicate.com';
 

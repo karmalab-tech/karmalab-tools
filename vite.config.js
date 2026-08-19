@@ -31,4 +31,12 @@ export default defineConfig({
       },
     },
   },
+  // Vitest. Nothing under test needs a DOM — the browser globals the modules
+  // touch (`localStorage`, `fetch`) are stubbed per test — so the node
+  // environment is enough. src/apps/video/frames.js is deliberately uncovered:
+  // it drives a real <video> and canvas, which jsdom cannot decode.
+  test: {
+    environment: 'node',
+    include: ['test/**/*.test.js'],
+  },
 });
