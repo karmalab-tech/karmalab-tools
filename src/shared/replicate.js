@@ -23,8 +23,12 @@ export async function createPrediction(modelId, input, apiKey) {
   });
   const data = await resp.json().catch(() => ({}));
   if (!resp.ok) {
-    const msg = (data && (data.detail || data.error || JSON.stringify(data))) || `HTTP ${resp.status}`;
-    throw new Error(msg);
+    // Prefer Replicate's own wording, then whatever body there was, and only
+    // fall back to the status code when the body is empty or unreadable —
+    // stringifying an empty object first would just report "{}" to the user.
+    const detail = data && (data.detail || data.error);
+    const body = data && Object.keys(data).length ? JSON.stringify(data) : '';
+    throw new Error(detail || body || `HTTP ${resp.status}`);
   }
   return data;
 }

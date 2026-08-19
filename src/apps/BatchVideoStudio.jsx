@@ -74,12 +74,21 @@ function ResultCard({ result }) {
     <div className="bg-panel-alt border border-panel-border rounded-2xl overflow-hidden flex flex-col">
       <div className="w-full aspect-video bg-black flex items-center justify-center relative overflow-hidden">
         {status === 'succeeded' && videoUrl ? (
-          <video src={videoUrl} controls playsInline className="w-full h-full object-contain block" />
+          <video
+            src={videoUrl}
+            controls
+            playsInline
+            className="w-full h-full object-contain block"
+          />
         ) : (
           <>
             {/* While it generates, the start frame previews what's coming. */}
             {startFrame && (
-              <img src={startFrame} alt="" className="absolute inset-0 w-full h-full object-cover opacity-30" />
+              <img
+                src={startFrame}
+                alt=""
+                className="absolute inset-0 w-full h-full object-cover opacity-30"
+              />
             )}
             {status === 'failed' ? (
               <div className="text-error font-mono text-2xl relative">!</div>
@@ -249,7 +258,6 @@ export default function BatchVideoStudio() {
       stopped = true;
     };
     // Run once on mount.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   async function handleGenerate() {

@@ -32,4 +32,3 @@ export const routes = [
     description: 'Hi Karma prompt box mockup.',
   },
 ];
-

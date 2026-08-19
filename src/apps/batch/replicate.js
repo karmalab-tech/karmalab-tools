@@ -15,7 +15,10 @@ export {
 } from '../../shared/replicate.js';
 
 // Assemble the Replicate `input` object for one prompt from a config snapshot.
-export function buildInput(cfg, { promptText, suffix, aspect, referenceImageDataUri, extraValues }) {
+export function buildInput(
+  cfg,
+  { promptText, suffix, aspect, referenceImageDataUri, extraValues }
+) {
   const trimmedSuffix = (suffix || '').trim();
   const finalPrompt = trimmedSuffix ? `${promptText} ${trimmedSuffix}`.trim() : promptText;
   const input = { prompt: finalPrompt, ...(cfg.extraInput || {}) };

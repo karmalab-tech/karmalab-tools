@@ -81,9 +81,7 @@ export const MODEL_CONFIGS = {
   'black-forest-labs/flux-kontext-pro': {
     label: 'Black Forest Labs · Flux Kontext Pro',
     aspectField: 'aspect_ratio',
-    aspectOptions: RATIOS.concat([
-      { value: 'match_input_image', label: 'Match reference image' },
-    ]),
+    aspectOptions: RATIOS.concat([{ value: 'match_input_image', label: 'Match reference image' }]),
     imageField: 'input_image',
     imageIsArray: false,
   },

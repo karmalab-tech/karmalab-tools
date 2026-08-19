@@ -135,12 +135,7 @@ export default function PromptBox() {
               </button>
             </div>
 
-            <IconButton
-              variant="round"
-              title="Send"
-              disabled={!canSend}
-              onClick={send}
-            >
+            <IconButton variant="round" title="Send" disabled={!canSend} onClick={send}>
               {sending ? <Spinner size={14} variant="dark" /> : <SendIcon />}
             </IconButton>
           </div>
