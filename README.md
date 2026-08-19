@@ -8,7 +8,6 @@ Replicate API.
   Replicate, in batch.
 - **Continuous Video Studio** (`/video-chain`) — chains video clips via Replicate:
   each clip starts from the last frame of the previous one.
-- **Prompt Box** (`/prompt`) — a styled mockup.
 
 ## Running locally
 
