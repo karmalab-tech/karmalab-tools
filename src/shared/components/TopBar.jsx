@@ -4,6 +4,7 @@
 
 const TOOLS = [
   { path: '/', label: 'Batch Images' },
+  { path: '/batch-videos', label: 'Batch Videos' },
   { path: '/video-chain', label: 'Video Chain' },
 ];
 

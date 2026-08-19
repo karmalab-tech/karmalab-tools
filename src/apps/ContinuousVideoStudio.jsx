@@ -21,12 +21,20 @@ import {
 } from '../shared/fields.js';
 import { useUnloadGuard } from '../shared/useUnloadGuard.js';
 import { loadApiKey } from '../shared/apiKey.js';
-import { createPrediction, pollPrediction, extractOutputUrl } from '../shared/replicate.js';
-import { MODEL_CONFIGS, MODEL_KEYS, buildVideoInput, defaultOptionValues } from './video/models.js';
+import {
+  VIDEO_POLL,
+  createPrediction,
+  extractOutputUrl,
+  friendlyErrorMessage,
+  pollPrediction,
+} from '../shared/replicate.js';
+import {
+  MODEL_CONFIGS,
+  MODEL_KEYS,
+  buildVideoInput,
+  defaultOptionValues,
+} from '../shared/videoModels.js';
 import { extractFrame, fetchVideoBlob } from './video/frames.js';
-
-// Video predictions run much longer than image ones — poll slower, wait longer.
-const VIDEO_POLL = { intervalMs: 3000, timeoutMs: 30 * 60 * 1000 };
 
 const MODES = [
   {
@@ -253,12 +261,7 @@ export default function ContinuousVideoStudio() {
       });
       return { ok: true, endFrame };
     } catch (err) {
-      let message = err.message || 'Something went wrong.';
-      if (/Failed to fetch|NetworkError|Load failed/i.test(message)) {
-        message =
-          'Request blocked before reaching Replicate — almost always the proxy. Make sure you are on the dev server (yarn dev) or the built server (yarn start).';
-      }
-      updateClip(id, { status: 'failed', error: message });
+      updateClip(id, { status: 'failed', error: friendlyErrorMessage(err) });
       return { ok: false, endFrame: null };
     }
   }

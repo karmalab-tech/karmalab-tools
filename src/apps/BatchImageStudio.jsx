@@ -29,6 +29,7 @@ import {
   getPrediction,
   pollPrediction,
   extractImageUrl,
+  friendlyErrorMessage,
 } from './batch/replicate.js';
 import { addJob, loadJobs, loadKey, removeJob, saveKey } from './batch/storage.js';
 
@@ -296,12 +297,7 @@ export default function BatchImageStudio() {
         removeJob(predictionId);
         return true;
       } catch (err) {
-        let message = err.message || 'Something went wrong.';
-        if (/Failed to fetch|NetworkError|Load failed/i.test(message)) {
-          message =
-            'Request blocked before reaching Replicate — almost always the proxy. Make sure you are on the dev server (yarn dev) or the built server (yarn start).';
-        }
-        updateResult(item.id, { status: 'failed', error: message });
+        updateResult(item.id, { status: 'failed', error: friendlyErrorMessage(err) });
         // A UI cancel only stops our polling — the prediction is still running on
         // Replicate, so keep the job to resume it next time. Real failures are done.
         if (predictionId && !cancelRef.current) removeJob(predictionId);

@@ -6,6 +6,9 @@ Replicate API.
 
 - **Batch Image Studio** (`/`) — generates one image per text prompt via
   Replicate, in batch.
+- **Batch Video Studio** (`/batch-videos`) — generates a batch of videos, either
+  one per prompt (with an optional shared start frame) or one per uploaded start
+  frame from a single prompt.
 - **Continuous Video Studio** (`/video-chain`) — chains video clips via Replicate:
   each clip starts from the last frame of the previous one.
 
@@ -15,11 +18,12 @@ Package manager is **yarn**; needs Node ≥ 18.11.
 
 ```bash
 yarn dev      # Vite dev server (HMR) + /v1 proxy — the normal workflow
-yarn build    # build both tools to dist/
+yarn build    # build every tool to dist/
 yarn start    # run the Node server on dist/ (build first)
 ```
 
-`yarn dev` serves `/`, `/video-chain` and `/prompt` on port 5173. Add a
+`yarn dev` serves `/`, `/batch-videos`, `/video-chain` and `/prompt` on port
+5173. Add a
 Replicate token via the "API key" button in the top bar (remembered in
 `localStorage`, shared by all tools).
 

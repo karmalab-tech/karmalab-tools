@@ -1,11 +1,13 @@
-// Per-model configuration for the Continuous Video Studio.
+// Per-model configuration for the video tools (Continuous Video Studio and
+// Batch Video Studio) — one shared catalogue of Replicate video models.
 //
 // Each entry is the single source of truth for how a model differs:
 //   label         — shown in the model <select>
 //   imageField    — the Replicate input key for the start frame
-//   requiresImage — true if the model cannot start from text alone (the first
-//                   clip then needs an uploaded frame; later clips always
-//                   chain from the previous end frame)
+//   requiresImage — true if the model cannot start from text alone, so a start
+//                   frame must be supplied (in the Continuous Video Studio only
+//                   the first clip needs one — the rest chain from the previous
+//                   end frame)
 //   note          — optional line shown under the model <select>
 //   extraInput    — static extra inputs always sent
 //   fields        — option <select>s rendered dynamically. Option values keep
@@ -202,7 +204,7 @@ export const MODEL_CONFIGS = {
     label: 'MiniMax · Hailuo 2.3 Fast',
     imageField: 'first_frame_image',
     requiresImage: true,
-    note: 'Image-to-video only — the first clip needs an uploaded start frame.',
+    note: 'Image-to-video only — it cannot start from text, so a start frame is required.',
     fields: [
       {
         key: 'duration',
