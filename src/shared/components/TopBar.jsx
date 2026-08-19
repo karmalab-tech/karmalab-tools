@@ -5,6 +5,7 @@
 const TOOLS = [
   { path: '/', label: 'Batch Images' },
   { path: '/video-chain', label: 'Video Chain' },
+  { path: '/video-effects', label: 'Video Effects' },
 ];
 
 const TAB =

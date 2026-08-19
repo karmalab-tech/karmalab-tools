@@ -18,6 +18,7 @@ export default defineConfig({
         index: 'index.html',
         prompt: 'prompt.html',
         'video-chain': 'video-chain.html',
+        'video-effects': 'video-effects.html',
       },
     },
   },

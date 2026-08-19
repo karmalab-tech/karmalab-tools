@@ -20,6 +20,12 @@ export const routes = [
     description: 'Chain video clips — each clip starts from the last frame of the previous one.',
   },
   {
+    path: '/video-effects',
+    file: 'video-effects.html',
+    title: 'Video Effects',
+    description: 'Apply real-time WebGL effects to a video, fully in the browser.',
+  },
+  {
     path: '/prompt',
     file: 'prompt.html',
     title: 'Prompt Box',
