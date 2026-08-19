@@ -190,13 +190,18 @@ export default function VideoEffects() {
   const engineRef = useRef(null);
   const replaceRef = useRef(null);
   const recordingRef = useRef(false);
-  const [recPct, setRecPct] = useState(null); // null = not recording
+  const fileRef = useRef(null); // the uploaded File, needed by the export pipeline
+  const abortRef = useRef(null);
+  const [recPct, setRecPct] = useState(null); // null = not exporting/recording
+  const [recSpeed, setRecSpeed] = useState(null); // × realtime, offline export only
+  const [recMode, setRecMode] = useState('export'); // 'export' | 'record'
 
   const effect = effectId ? EFFECTS_BY_ID[effectId] : null;
   const values = effect ? valuesByEffect[effectId] : null;
 
   function loadFile(file) {
     if (videoUrl) URL.revokeObjectURL(videoUrl);
+    fileRef.current = file;
     setVideoUrl(URL.createObjectURL(file));
     setVideoName(file.name);
     setPlaying(false);
@@ -265,12 +270,96 @@ export default function VideoEffects() {
     setCurrentTime(t);
   }
 
-  // Record one full loop of the effect canvas into a WebM and download it.
-  function downloadEffectVideo() {
+  function triggerBlobDownload(blob, filename) {
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+  }
+
+  const downloadBase = () => (videoName || 'video').replace(/\.[^.]+$/, '');
+
+  // Offline export: decode the source with WebCodecs, run every frame through
+  // a second engine at FULL resolution, encode to MP4 — faster than realtime.
+  // Clicking again while it runs cancels. Falls back to realtime canvas
+  // recording where WebCodecs isn't available.
+  async function downloadEffectVideo() {
+    if (recordingRef.current) {
+      abortRef.current?.abort(); // second click = cancel the export
+      return;
+    }
+    const file = fileRef.current;
+    if (!file || !duration) return;
+    if (typeof VideoEncoder === 'undefined') {
+      recordRealtime();
+      return;
+    }
+    recordingRef.current = true;
+    const abort = new AbortController();
+    abortRef.current = abort;
+    setRecMode('export');
+    setRecPct(0);
+    setRecSpeed(null);
+    // The values at click time drive the whole export; live tweaks only
+    // affect the preview.
+    const exportDef = effectId ? EFFECTS_BY_ID[effectId] : null;
+    const exportValues = effectId ? valuesByEffect[effectId] : null;
+    let exportEngine = null;
+    try {
+      // The export pipeline (and its MP4 demuxer) loads on demand.
+      const { exportVideo } = await import('../shared/videoExport');
+      const { blob } = await exportVideo({
+        file,
+        signal: abort.signal,
+        onProgress: ({ percent, speed }) => {
+          setRecPct(percent);
+          if (speed) setRecSpeed(speed);
+        },
+        render: (frame, timeSec, w, h) => {
+          if (!exportEngine) {
+            const off =
+              typeof OffscreenCanvas !== 'undefined'
+                ? new OffscreenCanvas(w, h)
+                : document.createElement('canvas');
+            exportEngine = new EffectEngine(off, null);
+            exportEngine.setExportSize(w, h);
+            if (exportDef) exportEngine.setEffect(exportDef, exportValues);
+          }
+          exportEngine.pushFrame(frame, timeSec);
+          return exportEngine.canvas;
+        },
+      });
+      triggerBlobDownload(blob, `${downloadBase()}-${effectId || 'original'}.mp4`);
+    } catch (err) {
+      if (err?.name !== 'AbortError') {
+        console.warn('Offline export failed — recording in realtime instead:', err);
+        exportEngine?.dispose();
+        exportEngine = null;
+        setRecPct(null);
+        recordingRef.current = false;
+        recordRealtime();
+        return;
+      }
+    } finally {
+      exportEngine?.dispose();
+      abortRef.current = null;
+      setRecPct(null);
+      setRecSpeed(null);
+      recordingRef.current = false;
+    }
+  }
+
+  // Fallback: capture the preview canvas in realtime with MediaRecorder.
+  function recordRealtime() {
     const v = videoRef.current;
     const canvas = canvasRef.current;
     if (!v || !canvas || recordingRef.current || !duration) return;
     recordingRef.current = true;
+    setRecMode('record');
     const wasPaused = v.paused;
     const stream = canvas.captureStream(30);
     let mime = 'video/webm;codecs=vp9';
@@ -297,16 +386,10 @@ export default function VideoEffects() {
     };
     const hardStop = setTimeout(stop, (duration + 2) * 1000);
     rec.onstop = () => {
-      const blob = new Blob(chunks, { type: 'video/webm' });
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      const base = (videoName || 'video').replace(/\.[^.]+$/, '');
-      a.href = url;
-      a.download = `${base}-${effectId || 'original'}.webm`;
-      document.body.appendChild(a);
-      a.click();
-      a.remove();
-      URL.revokeObjectURL(url);
+      triggerBlobDownload(
+        new Blob(chunks, { type: 'video/webm' }),
+        `${downloadBase()}-${effectId || 'original'}.webm`
+      );
       if (wasPaused) v.pause();
       setRecPct(null);
       recordingRef.current = false;
@@ -390,7 +473,11 @@ export default function VideoEffects() {
                 }`}
               >
                 <span className="font-mono text-[12px] text-black bg-accent border border-accent rounded-full px-4 py-2">
-                  {recPct !== null ? `Recording… ${recPct}%` : 'Download the processed video'}
+                  {recPct === null
+                    ? 'Download the processed video'
+                    : recMode === 'export'
+                      ? `Exporting… ${recPct}%${recSpeed ? ` · ${recSpeed.toFixed(1)}×` : ''} — click to cancel`
+                      : `Recording… ${recPct}%`}
                 </span>
               </div>
             </div>

@@ -101,9 +101,17 @@ void main(){
 }`;
 
 export class EffectEngine {
-  constructor(canvas, video) {
+  // Two modes:
+  //  - live preview: pass the <video> element; a rAF loop follows its clock.
+  //  - manual/offline (video = null): no loop — the caller drives it with
+  //    setExportSize() + pushFrame(source, timeSec), one deterministic frame
+  //    at a time (used by the export pipeline; `source` is any TexImageSource,
+  //    typically a WebCodecs VideoFrame). opts.maxSide caps the canvas
+  //    resolution (Infinity for full-res export).
+  constructor(canvas, video, opts = {}) {
     this.canvas = canvas;
-    this.video = video;
+    this.video = video || null;
+    this.maxSide = opts.maxSide ?? (video ? MAX_SIDE : Infinity);
     const gl = canvas.getContext('webgl2', { antialias: false, alpha: false });
     if (!gl) throw new Error('WebGL2 is not available in this browser.');
     this.gl = gl;
@@ -140,10 +148,12 @@ export class EffectEngine {
 
     this.width = 0;
     this.height = 0;
+    this.srcW = 2;
+    this.srcH = 2;
     this.t0 = performance.now();
     this.disposed = false;
     this.frame = this.frame.bind(this);
-    this.raf = requestAnimationFrame(this.frame);
+    this.raf = this.video ? requestAnimationFrame(this.frame) : 0;
   }
 
   // -- setup helpers --------------------------------------------------------
@@ -217,11 +227,7 @@ export class EffectEngine {
 
   // -- per-frame work ---------------------------------------------------------
 
-  resizeIfNeeded() {
-    const v = this.video;
-    const scale = Math.min(1, MAX_SIDE / Math.max(v.videoWidth, v.videoHeight));
-    const w = Math.max(2, Math.round(v.videoWidth * scale));
-    const h = Math.max(2, Math.round(v.videoHeight * scale));
+  setSize(w, h) {
     if (w === this.width && h === this.height) return;
     this.width = w;
     this.height = h;
@@ -234,11 +240,19 @@ export class EffectEngine {
     this.resetNeeded = true;
   }
 
-  uploadVideo(tex) {
+  resizeIfNeeded() {
+    const scale = Math.min(1, this.maxSide / Math.max(this.srcW, this.srcH));
+    this.setSize(
+      Math.max(2, Math.round(this.srcW * scale)),
+      Math.max(2, Math.round(this.srcH * scale))
+    );
+  }
+
+  uploadSource(tex, source) {
     const gl = this.gl;
     gl.bindTexture(gl.TEXTURE_2D, tex);
     gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, true);
-    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, gl.RGBA, gl.UNSIGNED_BYTE, this.video);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, gl.RGBA, gl.UNSIGNED_BYTE, source);
     gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false);
   }
 
@@ -249,7 +263,7 @@ export class EffectEngine {
     gl.bindTexture(gl.TEXTURE_2D, this.videoTex[this.parity]);
     gl.uniform1i(this.loc(rec, 'u_tex'), 0);
     gl.uniform2f(this.loc(rec, 'u_res'), targetW, targetH);
-    gl.uniform2f(this.loc(rec, 'u_texRes'), this.video.videoWidth, this.video.videoHeight);
+    gl.uniform2f(this.loc(rec, 'u_texRes'), this.srcW, this.srcH);
     gl.uniform1f(this.loc(rec, 'u_time'), time);
   }
 
@@ -300,25 +314,53 @@ export class EffectEngine {
     gl.clear(gl.COLOR_BUFFER_BIT);
   }
 
+  // Live-preview loop: follow the <video> element's clock.
   frame() {
     if (this.disposed) return;
     this.raf = requestAnimationFrame(this.frame);
-    const gl = this.gl;
     const v = this.video;
     if (v.readyState < 2 || !v.videoWidth) return;
+    this.srcW = v.videoWidth;
+    this.srcH = v.videoHeight;
     this.resizeIfNeeded();
 
     let newFrame = false;
     if (v.currentTime !== this.lastVideoTime || !this.hasFrame) {
       this.parity ^= 1;
-      this.uploadVideo(this.videoTex[this.parity]);
-      if (!this.hasFrame) this.uploadVideo(this.videoTex[this.parity ^ 1]);
+      this.uploadSource(this.videoTex[this.parity], v);
+      if (!this.hasFrame) this.uploadSource(this.videoTex[this.parity ^ 1], v);
       this.lastVideoTime = v.currentTime;
       this.hasFrame = true;
       newFrame = true;
     }
 
-    const time = (performance.now() - this.t0) / 1000;
+    this.renderFrame((performance.now() - this.t0) / 1000, newFrame);
+  }
+
+  // Manual/offline mode: set the output size once...
+  setExportSize(w, h) {
+    this.setSize(Math.max(2, Math.round(w)), Math.max(2, Math.round(h)));
+  }
+
+  // ...then push source frames one by one, with explicit timestamps, so
+  // time-based effects (history, feedback, sim) advance deterministically.
+  pushFrame(source, timeSec) {
+    this.srcW = source.displayWidth ?? source.videoWidth ?? source.width ?? this.srcW;
+    this.srcH = source.displayHeight ?? source.videoHeight ?? source.height ?? this.srcH;
+    if (!this.width) this.resizeIfNeeded();
+    this.parity ^= 1;
+    this.uploadSource(this.videoTex[this.parity], source);
+    if (!this.hasFrame) {
+      this.uploadSource(this.videoTex[this.parity ^ 1], source);
+      this.hasFrame = true;
+    }
+    this.renderFrame(timeSec, true);
+  }
+
+  // One frame through the selected effect's pipeline, onto the canvas.
+  renderFrame(time, newFrame) {
+    if (!this.hasFrame || !this.width) return;
+    const gl = this.gl;
     const def = this.effect;
     if (!def) {
       this.drawPass(this.videoTex[this.parity], null, 1);
