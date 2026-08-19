@@ -499,9 +499,6 @@ export default function BatchVideoStudio() {
                     'One prompt per line, e.g.\na slow dolly through a neon-lit alley in the rain\na drone shot rising over a foggy pine forest\nclose-up of espresso pouring into a glass cup'
                   }
                 />
-                <div className="font-mono text-[12px] text-text-dim mt-2.5 text-right">
-                  {prompts.length} {prompts.length === 1 ? 'prompt' : 'prompts'}
-                </div>
               </div>
 
               <div className={FIELD}>
@@ -552,7 +549,7 @@ export default function BatchVideoStudio() {
           )}
 
           <div className="flex gap-2.5 items-center mt-4.5">
-            <Button onClick={handleGenerate} disabled={isRunning}>
+            <Button onClick={handleGenerate} disabled={prompts.length == 0 || isRunning}>
               {isRunning ? (
                 <>
                   <Spinner variant="dark" /> Generating…
