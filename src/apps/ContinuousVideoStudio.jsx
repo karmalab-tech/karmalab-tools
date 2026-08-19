@@ -463,6 +463,10 @@ export default function ContinuousVideoStudio() {
             ))}
           </div>
 
+        </Panel>
+
+        <Panel title="Prompt & first frame">
+
           <div className={FIELD}>
             <label className={LABEL} htmlFor="promptInput">
               Prompt (used for every clip)
