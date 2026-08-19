@@ -13,6 +13,9 @@ Node server that also proxies the Replicate API.
 
 - **Batch Image Studio** (`/`) — one image per text prompt, in batch. The
   flagship tool.
+- **Batch Video Studio** (`/batch-videos`) — a batch of videos: one per prompt
+  line, or one per uploaded start frame. Both modes flatten to one list of run
+  items in `src/apps/batchVideo/items.js`.
 - **Continuous Video Studio** (`/video-chain`) — chains video clips; each clip
   starts from the last frame of the previous one, extracted in-browser via canvas.
 - **Prompt Box** (`/prompt`) — a styled, non-functional mockup. Don't wire it up
@@ -34,9 +37,10 @@ Node server that also proxies the Replicate API.
 4. **Tailwind utilities only.** Tokens are in `@theme` in
    `src/shared/theme.css`; there are no co-located `.css` files. Pull long
    repeated class strings into a local const or a variant map.
-5. **Adding a model is one entry** in `src/apps/batch/models.js` or
-   `src/apps/video/models.js` — the UI rebuilds itself from it. Don't special-case
-   a model in component code.
+5. **Adding a model is one entry** in `src/apps/batch/models.js` (images) or
+   `src/shared/videoModels.js` (video — shared by both video tools, so an entry
+   there appears in each). The UI rebuilds itself from it; don't special-case a
+   model in component code.
 6. **Adding a tool is three edits**: an HTML entry at the root, an input in
    `vite.config.js`, an entry in `server/routes.js`. `server/routes.js` is the
    source of truth for which tools exist.
@@ -44,9 +48,14 @@ Node server that also proxies the Replicate API.
 ## Where things are
 
 `src/entries/` mounts each tool · `src/apps/` the tools, with per-tool logic in
-`src/apps/batch/` and `src/apps/video/` · `src/shared/` the shared component
-library and helpers · `server/` the Node server, its proxy policy and route table
-· `test/` Vitest suites · `docs/` architecture notes and screenshots.
+`src/apps/batch/`, `src/apps/batchVideo/` and `src/apps/video/` · `src/shared/`
+the shared component library and helpers, including `videoModels.js` and
+`storage.js` (`createToolStorage(namespace)`), both shared across tools ·
+`server/` the Node server, its proxy policy and route table · `test/` Vitest
+suites · `docs/` architecture notes and screenshots.
+
+Anything two tools need goes in `src/shared/`, namespaced per tool where it
+touches storage — never reached for across `src/apps/`.
 
 ## Before you claim you're done
 

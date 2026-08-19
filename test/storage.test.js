@@ -1,9 +1,14 @@
-// Pending-job persistence. A Replicate prediction keeps running after the tab
-// closes, so these records are what lets a fresh page load pick the run back up
-// — and every read has to survive a browser where localStorage throws.
+// Namespaced localStorage, and the pending-job persistence built on it. A
+// Replicate prediction keeps running after the tab closes, so these records are
+// what lets a fresh page load pick the run back up — and every read has to
+// survive a browser where localStorage throws.
+//
+// Exercised through the Batch Image Studio's binding, plus the shared factory
+// directly, since two tools now have their own namespace in the same storage.
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { addJob, loadJobs, loadKey, removeJob, saveKey } from '../src/apps/batch/storage.js';
+import { createToolStorage } from '../src/shared/storage.js';
 
 const PREFIX = 'karmalab.batchImageStudio.';
 
@@ -113,5 +118,44 @@ describe('when localStorage is unavailable', () => {
     expect(() => saveKey('model', 'flux')).not.toThrow();
     expect(() => addJob({ predictionId: 'p1' })).not.toThrow();
     expect(() => removeJob('p1')).not.toThrow();
+  });
+});
+
+describe('createToolStorage namespacing', () => {
+  let store;
+  beforeEach(() => {
+    store = stubLocalStorage();
+  });
+
+  it('prefixes keys with the tool namespace', () => {
+    createToolStorage('batchVideoStudio').saveKey('model', 'google/veo-3.1');
+    expect(store.get('karmalab.batchVideoStudio.model')).toBe('google/veo-3.1');
+  });
+
+  it("keeps two tools from reading each other's values", () => {
+    const images = createToolStorage('batchImageStudio');
+    const videos = createToolStorage('batchVideoStudio');
+
+    images.saveKey('model', 'flux');
+    videos.saveKey('model', 'veo');
+
+    expect(images.loadKey('model')).toBe('flux');
+    expect(videos.loadKey('model')).toBe('veo');
+  });
+
+  it("keeps two tools' pending jobs apart", () => {
+    const images = createToolStorage('batchImageStudio');
+    const videos = createToolStorage('batchVideoStudio');
+
+    images.addJob({ predictionId: 'img1' });
+    videos.addJob({ predictionId: 'vid1' });
+
+    expect(images.loadJobs()).toEqual([{ predictionId: 'img1' }]);
+    expect(videos.loadJobs()).toEqual([{ predictionId: 'vid1' }]);
+
+    // Clearing one tool's jobs must leave the other's alone.
+    images.removeJob('img1');
+    expect(images.loadJobs()).toEqual([]);
+    expect(videos.loadJobs()).toEqual([{ predictionId: 'vid1' }]);
   });
 });

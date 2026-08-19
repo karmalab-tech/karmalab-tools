@@ -34,6 +34,18 @@ picks the run up where it left off.
 Models: OpenAI GPT Image 1 and 2, Flux 1.1 Pro, Flux Kontext Pro, Ideogram v3
 Turbo, Recraft v3, Stable Diffusion 3.5 Large.
 
+### Batch Video Studio — `/batch-videos`
+
+![The Batch Video Studio in one-prompt-per-line mode](docs/screenshot-batch-video-studio.png)
+
+The same idea as the image studio, for video, in two modes: **one video per
+prompt line** (with an optional start frame shared by all of them), or **one
+video per uploaded start frame**, all animated from a single prompt. Both modes
+run in parallel and download individually or as a zip.
+
+Models: Veo 3.1 and 3.1 Fast, Kling v3, Seedance 2.0, Hailuo 2.3 Fast, Wan 2.7
+i2v.
+
 ### Continuous Video Studio — `/video-chain`
 
 ![The Continuous Video Studio settings](docs/screenshot-continuous-video-studio.png)
@@ -44,8 +56,8 @@ Chains video clips into one continuous shot: each clip is generated from the
 auto-run a set number of clips or review each one and choose to continue, retry,
 or stop.
 
-Models: Veo 3.1 and 3.1 Fast, Kling v3, Seedance 2.0, Hailuo 2.3 Fast, Wan 2.7
-i2v.
+Models: the same catalogue as the Batch Video Studio — both video tools read
+`src/shared/videoModels.js`.
 
 ### Prompt Box — `/prompt`
 

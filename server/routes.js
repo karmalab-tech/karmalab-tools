@@ -14,6 +14,12 @@ export const routes = [
     description: 'Generate one image per prompt in batch via Replicate.',
   },
   {
+    path: '/batch-videos',
+    file: 'batch-videos.html',
+    title: 'Batch Video Studio',
+    description: 'Generate a batch of videos — one per prompt, or one per start frame.',
+  },
+  {
     path: '/video-chain',
     file: 'video-chain.html',
     title: 'Continuous Video Studio',

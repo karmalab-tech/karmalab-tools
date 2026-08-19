@@ -9,6 +9,9 @@ export const MAX_CONCURRENT = 3;
 export const POLL_INTERVAL_MS = 1500;
 export const POLL_TIMEOUT_MS = 5 * 60 * 1000;
 
+// Video predictions run much longer than image ones — poll slower, wait longer.
+export const VIDEO_POLL = { intervalMs: 3000, timeoutMs: 30 * 60 * 1000 };
+
 export async function createPrediction(modelId, input, apiKey) {
   const resp = await fetch(`/v1/models/${modelId}/predictions`, {
     method: 'POST',
@@ -74,4 +77,15 @@ export function extractOutputUrl(output) {
     return typeof output.url === 'function' ? output.url() : output.url;
   }
   return null;
+}
+
+// A failed fetch to our own `/v1` path means the request never left the page —
+// in practice the proxy is missing (the pages were opened without the dev or
+// built server). Say that instead of the browser's opaque "Failed to fetch".
+export function friendlyErrorMessage(err) {
+  const message = (err && err.message) || 'Something went wrong.';
+  if (/Failed to fetch|NetworkError|Load failed/i.test(message)) {
+    return 'Request blocked before reaching Replicate — almost always the proxy. Make sure you are on the dev server (yarn dev) or the built server (yarn start).';
+  }
+  return message;
 }

@@ -4,6 +4,7 @@
 import { describe, expect, it } from 'vitest';
 
 import { buildInput } from '../src/apps/batch/replicate.js';
+import { buildVideoInput } from '../src/shared/videoModels.js';
 
 const base = { promptText: 'a cat', suffix: '', aspect: '1:1', extraValues: {} };
 
@@ -74,5 +75,58 @@ describe('buildInput', () => {
       { ...base, extraValues: { quality: 'low' } }
     );
     expect(input.quality).toBe('low');
+  });
+});
+
+// The video tools' equivalent: same job, a different per-model field shape.
+describe('buildVideoInput', () => {
+  const cfg = { fields: [{ key: 'duration' }, { key: 'resolution' }], imageField: 'first_frame' };
+
+  it("sends the prompt plus the model's static input", () => {
+    expect(
+      buildVideoInput(
+        { fields: [], extraInput: { fps: 24 } },
+        { prompt: 'a cat', optionValues: {} }
+      )
+    ).toEqual({
+      prompt: 'a cat',
+      fps: 24,
+    });
+  });
+
+  it('includes the option values the model declares', () => {
+    const input = buildVideoInput(cfg, {
+      prompt: 'a cat',
+      optionValues: { duration: 8, resolution: '1080p' },
+    });
+    expect(input).toEqual({ prompt: 'a cat', duration: 8, resolution: '1080p' });
+  });
+
+  it('skips options that are unset, null or blank — but keeps false and 0', () => {
+    const boolCfg = {
+      fields: [{ key: 'sound' }, { key: 'seed' }, { key: 'style' }, { key: 'gone' }],
+    };
+    const input = buildVideoInput(boolCfg, {
+      prompt: 'a cat',
+      optionValues: { sound: false, seed: 0, style: '', gone: null },
+    });
+    expect(input.sound).toBe(false);
+    expect(input.seed).toBe(0);
+    expect(input).not.toHaveProperty('style');
+    expect(input).not.toHaveProperty('gone');
+  });
+
+  it("writes the start frame to the model's image field", () => {
+    const input = buildVideoInput(cfg, {
+      prompt: 'a cat',
+      optionValues: {},
+      startFrameDataUri: 'data:image/jpeg;base64,AAA',
+    });
+    expect(input.first_frame).toBe('data:image/jpeg;base64,AAA');
+  });
+
+  it('omits the image field for text-to-video', () => {
+    const input = buildVideoInput(cfg, { prompt: 'a cat', optionValues: {} });
+    expect(input).not.toHaveProperty('first_frame');
   });
 });

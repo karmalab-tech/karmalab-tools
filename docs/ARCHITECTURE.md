@@ -19,20 +19,21 @@ later.
 
 ## Layout
 
-| Path                                            | What it is                                                    |
-| ----------------------------------------------- | ------------------------------------------------------------- |
-| `index.html`, `video-chain.html`, `prompt.html` | Vite HTML entries for `/`, `/video-chain`, `/prompt`          |
-| `src/entries/`                                  | Mounts each tool's root React component                       |
-| `src/apps/`                                     | The tools themselves                                          |
-| `src/apps/batch/`                               | Batch Studio logic: `models.js`, `replicate.js`, `storage.js` |
-| `src/apps/video/`                               | Video Studio logic: `models.js`, `frames.js`                  |
-| `src/shared/`                                   | The shared library the tools are built from                   |
-| `server/index.js`                               | Node server: serves `dist/`, proxies Replicate                |
-| `server/proxy.js`                               | The proxy's request policy — allowlist, headers, rate limit   |
-| `server/routes.js`                              | Route table (clean route → built HTML)                        |
-| `vite.config.js`                                | Multi-page inputs + the dev `/v1` proxy                       |
-| `test/`                                         | Vitest suites                                                 |
-| `Dockerfile`, `fly.toml`                        | fly.io deployment                                             |
+| Path                                                                 | What it is                                                            |
+| -------------------------------------------------------------------- | --------------------------------------------------------------------- |
+| `index.html`, `batch-videos.html`, `video-chain.html`, `prompt.html` | Vite HTML entries for `/`, `/batch-videos`, `/video-chain`, `/prompt` |
+| `src/entries/`                                                       | Mounts each tool's root React component                               |
+| `src/apps/`                                                          | The tools themselves                                                  |
+| `src/apps/batch/`                                                    | Batch Image logic: `models.js`, `replicate.js`, `storage.js`          |
+| `src/apps/batchVideo/`                                               | Batch Video logic: `items.js`, `storage.js`                           |
+| `src/apps/video/`                                                    | Continuous Video logic: `frames.js`                                   |
+| `src/shared/`                                                        | The shared library the tools are built from                           |
+| `server/index.js`                                                    | Node server: serves `dist/`, proxies Replicate                        |
+| `server/proxy.js`                                                    | The proxy's request policy — allowlist, headers, rate limit           |
+| `server/routes.js`                                                   | Route table (clean route → built HTML)                                |
+| `vite.config.js`                                                     | Multi-page inputs + the dev `/v1` proxy                               |
+| `test/`                                                              | Vitest suites                                                         |
+| `Dockerfile`, `fly.toml`                                             | fly.io deployment                                                     |
 
 `src/shared/` holds:
 
@@ -40,7 +41,16 @@ later.
 - `components/` — `Spinner`, `IconButton`, `Input`, `Button`, `Panel`, `Brand`,
   `ImageDrop`, `TopBar` (cross-tool nav + the API key button), `ApiKeyModal`.
   Import from `src/shared/components`, which is also what pulls in `theme.css`.
-- `replicate.js` — generic prediction create / poll / output helpers.
+- `replicate.js` — generic prediction create / poll / output helpers, the
+  longer polling profile video needs, and `friendlyErrorMessage()`, which turns a
+  failed same-origin fetch into "the proxy isn't there" rather than the browser's
+  opaque "Failed to fetch".
+- `videoModels.js` — the video model catalogue and input assembly, shared by the
+  Batch Video Studio and the Continuous Video Studio, so a model added once
+  appears in both.
+- `storage.js` — `createToolStorage(namespace)`: namespaced `localStorage` plus
+  the pending-prediction persistence both batch tools use. Each tool gets its own
+  `karmalab.<namespace>.` prefix so no tool can read another's state.
 - `apiKey.js` — the shared keys in `localStorage`: the Replicate token, plus the
   OpenAI key that only OpenAI models need. Older per-tool storage keys are still
   read as a fallback so existing users keep their keys.
@@ -95,7 +105,7 @@ through the shared components barrel), so tokens double as utilities:
 `bg-panel`, `text-text-dim`, `border-panel-border`, `font-mono`,
 `animate-klb-spin`.
 
-Both tools and every shared component are on utilities — there are no co-located
+Every tool and every shared component is on utilities — there are no co-located
 `.css` files. Longer, repeated class strings are pulled out into local consts
 (`CONTROL`, `FIELD` in `BatchImageStudio.jsx`) or a variant map (`IconButton`,
 `Button`).
@@ -109,9 +119,14 @@ modules touch (`localStorage`, `fetch`) are stubbed per test. Covered:
   what it _refuses_ is tested as thoroughly as what it allows.
 - `src/shared/replicate.js` — the polling loop's terminal states, cancellation,
   timeout, and the several output shapes models return.
-- `src/apps/batch/replicate.js` — `buildInput()`, which assembles per-model input.
-- `src/apps/batch/storage.js` — pending-job persistence, including corrupt JSON
-  and a `localStorage` that throws.
+- `src/apps/batch/replicate.js` and `src/shared/videoModels.js` —
+  `buildInput()` and `buildVideoInput()`, which assemble per-model input. The
+  video one has to keep `false` and `0` while dropping `''` and `null`.
+- `src/shared/storage.js` — pending-job persistence, including corrupt JSON, a
+  `localStorage` that throws, and that two tools' namespaces stay separate.
+- `src/apps/batchVideo/items.js` — how both batch modes flatten to one run list,
+  and the filename stems derived from uploaded image names (extension stripping,
+  punctuation collapsing, truncation, and names that slug to nothing).
 
 **Not covered:** `src/apps/video/frames.js`. It drives a real `<video>` element
 and canvas, including a seek to just short of the clip's duration. jsdom does not

@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   createPrediction,
   extractOutputUrl,
+  friendlyErrorMessage,
   getPrediction,
   pollPrediction,
 } from '../src/shared/replicate.js';
@@ -144,5 +145,26 @@ describe('extractOutputUrl', () => {
 
   it('returns null for an object with no url', () => {
     expect(extractOutputUrl({ status: 'succeeded' })).toBeNull();
+  });
+});
+
+describe('friendlyErrorMessage', () => {
+  it('explains the proxy when the request never left the page', () => {
+    // A failed fetch to our own /v1 path means the proxy isn't there — the
+    // browser's own wording ("Failed to fetch") tells the user nothing.
+    for (const raw of ['Failed to fetch', 'NetworkError when attempting to fetch', 'Load failed']) {
+      expect(friendlyErrorMessage(new Error(raw))).toMatch(/proxy/i);
+    }
+  });
+
+  it('passes a real API error through untouched', () => {
+    expect(friendlyErrorMessage(new Error('Invalid input: prompt too long'))).toBe(
+      'Invalid input: prompt too long'
+    );
+  });
+
+  it('has something to say about a thrown value with no message', () => {
+    expect(friendlyErrorMessage(null)).toBe('Something went wrong.');
+    expect(friendlyErrorMessage(new Error(''))).toBe('Something went wrong.');
   });
 });

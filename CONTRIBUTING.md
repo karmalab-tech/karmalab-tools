@@ -36,7 +36,8 @@ fixes what ESLint can.
 One entry in the relevant `models.js` — the UI rebuilds itself from it.
 
 - Images: `src/apps/batch/models.js`
-- Video: `src/apps/video/models.js`
+- Video: `src/shared/videoModels.js` — shared by the Batch Video Studio and the
+  Continuous Video Studio, so one entry appears in both. Check it works in each.
 
 Each entry declares only how that model _differs_: which key it wants for the
 aspect ratio, whether it takes a reference image and whether that field is an
