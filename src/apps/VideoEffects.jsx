@@ -189,6 +189,8 @@ export default function VideoEffects() {
   const canvasRef = useRef(null);
   const engineRef = useRef(null);
   const replaceRef = useRef(null);
+  const recordingRef = useRef(false);
+  const [recPct, setRecPct] = useState(null); // null = not recording
 
   const effect = effectId ? EFFECTS_BY_ID[effectId] : null;
   const values = effect ? valuesByEffect[effectId] : null;
@@ -263,6 +265,59 @@ export default function VideoEffects() {
     setCurrentTime(t);
   }
 
+  // Record one full loop of the effect canvas into a WebM and download it.
+  function downloadEffectVideo() {
+    const v = videoRef.current;
+    const canvas = canvasRef.current;
+    if (!v || !canvas || recordingRef.current || !duration) return;
+    recordingRef.current = true;
+    const wasPaused = v.paused;
+    const stream = canvas.captureStream(30);
+    let mime = 'video/webm;codecs=vp9';
+    if (!window.MediaRecorder?.isTypeSupported(mime)) mime = 'video/webm';
+    const rec = new MediaRecorder(stream, { mimeType: mime, videoBitsPerSecond: 12_000_000 });
+    const chunks = [];
+    rec.ondataavailable = (e) => e.data.size && chunks.push(e.data);
+    let last = 0;
+    let stopped = false;
+    const stop = () => {
+      if (stopped) return;
+      stopped = true;
+      v.removeEventListener('timeupdate', onTime);
+      clearTimeout(hardStop);
+      rec.stop();
+    };
+    const onTime = () => {
+      const t = v.currentTime;
+      if (t < last - 0.2) stop(); // looped back to the start — one pass done
+      else {
+        last = t;
+        setRecPct(Math.min(99, Math.round((t / duration) * 100)));
+      }
+    };
+    const hardStop = setTimeout(stop, (duration + 2) * 1000);
+    rec.onstop = () => {
+      const blob = new Blob(chunks, { type: 'video/webm' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      const base = (videoName || 'video').replace(/\.[^.]+$/, '');
+      a.href = url;
+      a.download = `${base}-${effectId || 'original'}.webm`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+      if (wasPaused) v.pause();
+      setRecPct(null);
+      recordingRef.current = false;
+    };
+    setRecPct(0);
+    v.currentTime = 0;
+    v.addEventListener('timeupdate', onTime);
+    v.play().catch(() => {});
+    rec.start(250);
+  }
+
   return (
     <div className="min-h-screen flex flex-col">
       <div className="px-3 py-2.5 border-b border-panel-border">
@@ -320,7 +375,25 @@ export default function VideoEffects() {
 
         <div className="relative">
           {videoUrl && !glError ? (
-            <canvas ref={canvasRef} className="w-full aspect-video object-contain bg-black block" />
+            <div
+              className="relative group cursor-pointer"
+              onClick={downloadEffectVideo}
+              title="Click to download the processed video"
+            >
+              <canvas
+                ref={canvasRef}
+                className="w-full aspect-video object-contain bg-black block"
+              />
+              <div
+                className={`absolute inset-0 flex items-center justify-center bg-black/50 transition-opacity duration-150 pointer-events-none ${
+                  recPct !== null ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'
+                }`}
+              >
+                <span className="font-mono text-[12px] text-black bg-accent border border-accent rounded-full px-4 py-2">
+                  {recPct !== null ? `Recording… ${recPct}%` : 'Download the processed video'}
+                </span>
+              </div>
+            </div>
           ) : (
             <div className="w-full aspect-video bg-panel-alt flex items-center justify-center px-6">
               <span className="font-mono text-[12.5px] text-text-dim text-center leading-[1.6]">
@@ -369,13 +442,13 @@ export default function VideoEffects() {
             <div className="font-mono text-[11px] uppercase tracking-[0.08em] text-text-dim mb-2">
               Effects
             </div>
-            <div className="flex gap-2 overflow-x-auto pb-1">
+            <div className="grid grid-cols-[repeat(auto-fill,minmax(150px,1fr))] gap-2 max-h-76 overflow-y-auto pr-1">
               {EFFECTS.map((e, i) => (
                 <button
                   key={e.id}
                   type="button"
                   onClick={() => selectEffect(e.id)}
-                  className={`relative shrink-0 w-36 h-22 rounded-lg border overflow-hidden cursor-pointer text-left transition-colors duration-150 ${
+                  className={`relative w-full h-22 rounded-lg border overflow-hidden cursor-pointer text-left transition-colors duration-150 ${
                     effectId === e.id
                       ? 'border-accent ring-1 ring-accent'
                       : 'border-panel-border hover:border-accent'
