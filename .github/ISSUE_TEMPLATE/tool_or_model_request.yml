@@ -1,0 +1,45 @@
+name: New tool or model
+description: Propose a model to add, or a new tool
+labels: [enhancement]
+body:
+  - type: dropdown
+    id: kind
+    attributes:
+      label: What are you proposing
+      options:
+        - A Replicate model to add to an existing tool
+        - A new tool
+    validations:
+      required: true
+
+  - type: input
+    id: model
+    attributes:
+      label: Replicate model
+      description: >
+        For a model request, its `owner/name` on Replicate. Adding one is a
+        single entry in the relevant models.js — see CONTRIBUTING.md.
+      placeholder: google/veo-3.1
+    validations:
+      required: false
+
+  - type: textarea
+    id: what-for
+    attributes:
+      label: What it's for
+      description: >
+        What you'd use it for, and why the existing tools don't cover it. For a
+        new tool, roughly what it would do.
+    validations:
+      required: true
+
+  - type: textarea
+    id: notes
+    attributes:
+      label: Anything unusual about its inputs
+      description: >
+        For a model: does it want a non-standard key for the aspect ratio, a
+        reference image as an array, or its own API key? That's what the model
+        config captures.
+    validations:
+      required: false

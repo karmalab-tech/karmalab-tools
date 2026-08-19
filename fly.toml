@@ -1,9 +1,13 @@
-# fly.toml app configuration file generated for tools-9dc2aw on 2026-07-06T12:11:14Z
+# fly.io configuration for KarmaLab Tools.
 #
-# See https://fly.io/docs/reference/configuration/ for information about how to use this file.
+# `app` below is a placeholder: app names are globally unique on fly.io, so this
+# file cannot name a real app that a fork could deploy to. Run `fly launch` once
+# to create your own app and have it rewrite this line, or set the name yourself
+# and deploy with `fly deploy`.
 #
+# See https://fly.io/docs/reference/configuration/ for the full reference.
 
-app = 'tools-9dc2aw'
+app = 'karmalab-tools'
 primary_region = 'cdg'
 
 [build]
