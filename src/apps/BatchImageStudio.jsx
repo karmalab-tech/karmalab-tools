@@ -29,6 +29,7 @@ import {
   getPrediction,
   pollPrediction,
   extractImageUrl,
+  friendlyErrorMessage,
 } from './batch/replicate.js';
 import { addJob, loadJobs, loadKey, removeJob, saveKey } from './batch/storage.js';
 
@@ -296,12 +297,7 @@ export default function BatchImageStudio() {
         removeJob(predictionId);
         return true;
       } catch (err) {
-        let message = err.message || 'Something went wrong.';
-        if (/Failed to fetch|NetworkError|Load failed/i.test(message)) {
-          message =
-            'Request blocked before reaching Replicate — almost always the proxy. Make sure you are on the dev server (yarn dev) or the built server (yarn start).';
-        }
-        updateResult(item.id, { status: 'failed', error: message });
+        updateResult(item.id, { status: 'failed', error: friendlyErrorMessage(err) });
         // A UI cancel only stops our polling — the prediction is still running on
         // Replicate, so keep the job to resume it next time. Real failures are done.
         if (predictionId && !cancelRef.current) removeJob(predictionId);
@@ -455,10 +451,28 @@ export default function BatchImageStudio() {
               {f.help && <div className={FIELD_HELP}>{f.help}</div>}
             </div>
           ))}
+        </Panel>
+
+        <Panel title="Prompts">
+          
+          <div className={FIELD}>
+            <label className={LABEL} htmlFor="suffixInput">
+              List of prompts (one per line)
+            </label>
+            <textarea
+              value={promptsText}
+              className={`${CONTROL} resize-y min-h-40 leading-[1.6] text-[14.5px]`}
+              onChange={(e) => setPromptsText(e.target.value)}
+              placeholder={
+                'One prompt per line, e.g.\na fox reading a book in a library\na neon city street in the rain\na bowl of ramen, top-down shot'
+              }
+            />
+
+          </div>
 
           <div className={FIELD}>
             <label className={LABEL} htmlFor="suffixInput">
-              Prompt suffix (appended to every prompt)
+              Prompt suffix (appended to every prompt) - optional
             </label>
             <Input
               id="suffixInput"
@@ -469,43 +483,24 @@ export default function BatchImageStudio() {
           </div>
 
           <div className={FIELD}>
-            <label className={LABEL}>Reference image (used for every generation)</label>
+            <label className={LABEL}>Reference image (used for every generation) - optional</label>
             <ImageDrop
               image={referenceImage}
               onChange={setReferenceImage}
               disabled={!supportsImage}
               setLabel="Reference image set"
-              hint="Optional · used as a reference for supported models"
+              hint={supportsImage ? "Will be used as a reference" : 'This model does not support a reference image — it will be ignored.'}
             />
-            <div className={FIELD_HELP}>
-              {supportsImage
-                ? `Sent as ${cfg.imageIsArray ? 'an array containing this image' : 'a single reference image'} with every generation.`
-                : 'This model does not support a reference image — it will be ignored.'}
-            </div>
-          </div>
-        </Panel>
-
-        <Panel title="Prompts">
-          <textarea
-            value={promptsText}
-            className={`${CONTROL} resize-y min-h-40 leading-[1.6] text-[14.5px]`}
-            onChange={(e) => setPromptsText(e.target.value)}
-            placeholder={
-              'One prompt per line, e.g.\na fox reading a book in a library\na neon city street in the rain\na bowl of ramen, top-down shot'
-            }
-          />
-          <div className="font-mono text-[12px] text-text-dim mt-2.5 text-right">
-            {prompts.length} {prompts.length === 1 ? 'prompt' : 'prompts'}
           </div>
 
           <div className="flex gap-2.5 items-center mt-4.5">
-            <Button onClick={handleGenerate} disabled={isRunning}>
+            <Button onClick={handleGenerate} disabled={prompts.length == 0 || isRunning}>
               {isRunning ? (
                 <>
                   <Spinner variant="dark" /> Generating…
                 </>
               ) : (
-                'Generate images'
+                `Generate ${prompts.length} image${prompts.length === 1 ? '' : 's'}`
               )}
             </Button>
             {isRunning && (

@@ -10,6 +10,7 @@ export {
   createPrediction,
   getPrediction,
   pollPrediction,
+  friendlyErrorMessage,
   extractOutputUrl as extractImageUrl,
 } from '../../shared/replicate.js';
 
