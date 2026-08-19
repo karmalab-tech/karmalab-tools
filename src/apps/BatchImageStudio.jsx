@@ -83,23 +83,13 @@ function ResultCard({ result }) {
           )}
           {status}
         </span>
-        <div
-          className="text-[12.5px] text-text-dim leading-[1.4] line-clamp-2"
-          title={prompt}
-        >
+        <div className="text-[12.5px] text-text-dim leading-[1.4] line-clamp-2" title={prompt}>
           {prompt}
         </div>
-        {error && (
-          <div className="text-[11.5px] text-error leading-[1.4] font-mono">{error}</div>
-        )}
+        {error && <div className="text-[11.5px] text-error leading-[1.4] font-mono">{error}</div>}
         {status === 'succeeded' && imageUrl && (
           <div className="flex gap-1.5 mt-0.5">
-            <a
-              className={MINI_BTN}
-              href={imageUrl}
-              target="_blank"
-              rel="noopener noreferrer"
-            >
+            <a className={MINI_BTN} href={imageUrl} target="_blank" rel="noopener noreferrer">
               Open
             </a>
             <button type="button" className={MINI_BTN} onClick={download}>
@@ -134,7 +124,10 @@ export default function BatchImageStudio() {
 
   const cfg = MODEL_CONFIGS[modelKey];
   const supportsImage = !!cfg.imageField;
-  const prompts = promptsText.split('\n').map((p) => p.trim()).filter(Boolean);
+  const prompts = promptsText
+    .split('\n')
+    .map((p) => p.trim())
+    .filter(Boolean);
   const succeededResults = results.filter((r) => r.status === 'succeeded' && r.imageUrl);
 
   // Closing the tab loses the batch's progress tracking — intercept it while a
@@ -231,7 +224,6 @@ export default function BatchImageStudio() {
       stopped = true;
     };
     // Run once on mount.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   async function handleGenerate() {
@@ -260,7 +252,13 @@ export default function BatchImageStudio() {
     const items = prompts.map((prompt) => ({ id: `r${++counterRef.current}`, prompt }));
     setResults((prev) => [
       ...prev,
-      ...items.map((it) => ({ id: it.id, prompt: it.prompt, status: 'queued', imageUrl: null, error: null })),
+      ...items.map((it) => ({
+        id: it.id,
+        prompt: it.prompt,
+        status: 'queued',
+        imageUrl: null,
+        error: null,
+      })),
     ]);
 
     const modelId = modelKey;
@@ -441,7 +439,9 @@ export default function BatchImageStudio() {
                       openaiKey.trim() ? 'bg-success' : 'bg-error'
                     }`}
                   />
-                  {openaiKey.trim() ? 'OpenAI API key set — manage in API keys' : 'Add your OpenAI API key…'}
+                  {openaiKey.trim()
+                    ? 'OpenAI API key set — manage in API keys'
+                    : 'Add your OpenAI API key…'}
                 </button>
               ) : (
                 <Input

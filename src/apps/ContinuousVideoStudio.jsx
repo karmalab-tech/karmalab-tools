@@ -85,7 +85,12 @@ function ClipCard({ clip }) {
     <div className="bg-panel-alt border border-panel-border rounded-2xl overflow-hidden flex flex-col">
       <div className="w-full aspect-video bg-black flex items-center justify-center relative overflow-hidden">
         {status === 'succeeded' && videoUrl ? (
-          <video src={videoUrl} controls playsInline className="w-full h-full object-contain block" />
+          <video
+            src={videoUrl}
+            controls
+            playsInline
+            className="w-full h-full object-contain block"
+          />
         ) : status === 'failed' ? (
           <div className="text-error font-mono text-2xl">!</div>
         ) : (
@@ -118,9 +123,7 @@ function ClipCard({ clip }) {
             filename={`clip-${n}-end-frame.${frameExt(endFrame)}`}
           />
         </div>
-        {error && (
-          <div className="text-[11.5px] text-error leading-[1.4] font-mono">{error}</div>
-        )}
+        {error && <div className="text-[11.5px] text-error leading-[1.4] font-mono">{error}</div>}
         {status === 'succeeded' && (
           <div className="flex gap-1.5 mt-0.5">
             {remoteUrl && (
@@ -229,11 +232,20 @@ export default function ContinuousVideoStudio() {
       },
     ]);
     try {
-      const input = buildVideoInput(cfg, { prompt: prompt.trim(), optionValues, startFrameDataUri: startFrame });
+      const input = buildVideoInput(cfg, {
+        prompt: prompt.trim(),
+        optionValues,
+        startFrameDataUri: startFrame,
+      });
       updateClip(id, { status: 'running' });
       const prediction = await createPrediction(modelKey, input, key);
       updateClip(id, { predictionId: prediction.id });
-      const finalData = await pollPrediction(prediction.id, key, () => cancelRef.current, VIDEO_POLL);
+      const finalData = await pollPrediction(
+        prediction.id,
+        key,
+        () => cancelRef.current,
+        VIDEO_POLL
+      );
       const remoteUrl = extractOutputUrl(finalData.output);
       if (!remoteUrl) throw new Error('No video returned by the model.');
 
@@ -295,7 +307,10 @@ export default function ContinuousVideoStudio() {
     setPhase('awaiting');
     setRunHint(
       res.ok
-        ? { text: `Clip ${index + 1} is ready — review it below, then continue, retry, or finish.`, isError: false }
+        ? {
+            text: `Clip ${index + 1} is ready — review it below, then continue, retry, or finish.`,
+            isError: false,
+          }
         : { text: `Clip ${index + 1} failed — retry it or finish the chain.`, isError: true }
     );
   }

@@ -5,6 +5,20 @@
   "type": "module",
   "main": "server/index.js",
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/karmalab-tech/karmalab-tools.git"
+  },
+  "bugs": {
+    "url": "https://github.com/karmalab-tech/karmalab-tools/issues"
+  },
+  "keywords": [
+    "replicate",
+    "image-generation",
+    "video-generation",
+    "react",
+    "vite"
+  ],
   "packageManager": "yarn@1.22.22",
   "engines": {
     "node": ">=18.11"
@@ -13,7 +27,13 @@
     "dev": "vite",
     "build": "vite build",
     "preview": "vite preview",
-    "start": "node server/index.js"
+    "start": "node server/index.js",
+    "lint": "eslint .",
+    "lint:fix": "eslint . --fix",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "test": "vitest run",
+    "test:watch": "vitest"
   },
   "dependencies": {
     "jszip": "^3.10.1",
@@ -21,9 +41,17 @@
     "react-dom": "^18.3.1"
   },
   "devDependencies": {
+    "@eslint/js": "^9",
     "@tailwindcss/vite": "^4.3.2",
     "@vitejs/plugin-react": "^4.3.4",
+    "eslint": "^9",
+    "eslint-config-prettier": "^10.1.8",
+    "eslint-plugin-react": "^7.37.5",
+    "eslint-plugin-react-hooks": "^7.1.1",
+    "globals": "^17.11.0",
+    "prettier": "^3.9.6",
     "tailwindcss": "^4.3.2",
-    "vite": "^6.0.7"
+    "vite": "^6.0.7",
+    "vitest": "^3"
   }
 }
