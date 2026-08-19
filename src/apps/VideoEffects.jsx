@@ -181,8 +181,12 @@ export default function VideoEffects() {
   const [currentTime, setCurrentTime] = useState(0);
   const [glError, setGlError] = useState('');
 
-  const [effectId, setEffectId] = useState(null);
-  // Tweaked values are kept per effect, so switching back keeps your settings.
+  // Effects combine: `enabledIds` is the active chain in activation order
+  // (each effect's output feeds the next). `selectedId` is the effect whose
+  // settings are shown — always one of the enabled effects.
+  const [enabledIds, setEnabledIds] = useState([]);
+  const [selectedId, setSelectedId] = useState(null);
+  // Tweaked values are kept per effect, so toggling keeps your settings.
   const [valuesByEffect, setValuesByEffect] = useState({});
 
   const videoRef = useRef(null);
@@ -196,8 +200,10 @@ export default function VideoEffects() {
   const [recSpeed, setRecSpeed] = useState(null); // × realtime, offline export only
   const [recMode, setRecMode] = useState('export'); // 'export' | 'record'
 
-  const effect = effectId ? EFFECTS_BY_ID[effectId] : null;
-  const values = effect ? valuesByEffect[effectId] : null;
+  const effect = selectedId ? EFFECTS_BY_ID[selectedId] : null;
+  const values = effect ? valuesByEffect[selectedId] : null;
+
+  const buildChain = (ids, vals) => ids.map((id) => ({ def: EFFECTS_BY_ID[id], values: vals[id] }));
 
   function loadFile(file) {
     if (videoUrl) URL.revokeObjectURL(videoUrl);
@@ -221,8 +227,8 @@ export default function VideoEffects() {
       return undefined;
     }
     engineRef.current = engine;
-    if (effectId) {
-      engine.setEffect(EFFECTS_BY_ID[effectId], valuesByEffect[effectId]);
+    if (enabledIds.length) {
+      engine.setEffects(buildChain(enabledIds, valuesByEffect));
     }
     return () => {
       engine.dispose();
@@ -233,27 +239,46 @@ export default function VideoEffects() {
 
   useEffect(() => () => videoUrl && URL.revokeObjectURL(videoUrl), [videoUrl]);
 
-  function selectEffect(id) {
-    setEffectId(id);
-    setValuesByEffect((prev) => {
-      const next = prev[id] ? prev : { ...prev, [id]: defaultValues(EFFECTS_BY_ID[id]) };
-      engineRef.current?.setEffect(EFFECTS_BY_ID[id], next[id]);
-      return next;
-    });
+  // Clicking a card selects it, and turns it on if it was off. Only the
+  // toggle turns an effect off.
+  function cardClick(id) {
+    if (enabledIds.includes(id)) {
+      setSelectedId(id);
+      return;
+    }
+    enableEffect(id);
+  }
+
+  function enableEffect(id) {
+    const vals = valuesByEffect[id]
+      ? valuesByEffect
+      : { ...valuesByEffect, [id]: defaultValues(EFFECTS_BY_ID[id]) };
+    const ids = enabledIds.includes(id) ? enabledIds : [...enabledIds, id];
+    setValuesByEffect(vals);
+    setEnabledIds(ids);
+    setSelectedId(id);
+    engineRef.current?.setEffects(buildChain(ids, vals));
+  }
+
+  function disableEffect(id) {
+    const ids = enabledIds.filter((x) => x !== id);
+    setEnabledIds(ids);
+    if (selectedId === id) setSelectedId(ids[ids.length - 1] ?? null);
+    engineRef.current?.setEffects(buildChain(ids, valuesByEffect));
   }
 
   function updateValue(key, val) {
     setValuesByEffect((prev) => {
-      const next = { ...prev, [effectId]: { ...prev[effectId], [key]: val } };
-      engineRef.current?.setParams(next[effectId]);
+      const next = { ...prev, [selectedId]: { ...prev[selectedId], [key]: val } };
+      engineRef.current?.setValues(selectedId, next[selectedId]);
       return next;
     });
   }
 
   function resetValues() {
     const next = defaultValues(effect);
-    setValuesByEffect((prev) => ({ ...prev, [effectId]: next }));
-    engineRef.current?.setParams(next);
+    setValuesByEffect((prev) => ({ ...prev, [selectedId]: next }));
+    engineRef.current?.setValues(selectedId, next);
   }
 
   function togglePlay() {
@@ -282,6 +307,12 @@ export default function VideoEffects() {
   }
 
   const downloadBase = () => (videoName || 'video').replace(/\.[^.]+$/, '');
+  const effectSuffix = () =>
+    enabledIds.length === 0
+      ? 'original'
+      : enabledIds.length <= 2
+        ? enabledIds.join('+')
+        : `${enabledIds.length}-effects`;
 
   // Offline export: decode the source with WebCodecs, run every frame through
   // a second engine at FULL resolution, encode to MP4 — faster than realtime.
@@ -304,10 +335,10 @@ export default function VideoEffects() {
     setRecMode('export');
     setRecPct(0);
     setRecSpeed(null);
-    // The values at click time drive the whole export; live tweaks only
+    // The chain at click time drives the whole export; live tweaks only
     // affect the preview.
-    const exportDef = effectId ? EFFECTS_BY_ID[effectId] : null;
-    const exportValues = effectId ? valuesByEffect[effectId] : null;
+    const exportChain = buildChain(enabledIds, valuesByEffect);
+    const suffix = effectSuffix();
     let exportEngine = null;
     try {
       // The export pipeline (and its MP4 demuxer) loads on demand.
@@ -327,13 +358,13 @@ export default function VideoEffects() {
                 : document.createElement('canvas');
             exportEngine = new EffectEngine(off, null);
             exportEngine.setExportSize(w, h);
-            if (exportDef) exportEngine.setEffect(exportDef, exportValues);
+            exportEngine.setEffects(exportChain);
           }
           exportEngine.pushFrame(frame, timeSec);
           return exportEngine.canvas;
         },
       });
-      triggerBlobDownload(blob, `${downloadBase()}-${effectId || 'original'}.mp4`);
+      triggerBlobDownload(blob, `${downloadBase()}-${suffix}.mp4`);
     } catch (err) {
       if (err?.name !== 'AbortError') {
         console.warn('Offline export failed — recording in realtime instead:', err);
@@ -388,7 +419,7 @@ export default function VideoEffects() {
     rec.onstop = () => {
       triggerBlobDownload(
         new Blob(chunks, { type: 'video/webm' }),
-        `${downloadBase()}-${effectId || 'original'}.webm`
+        `${downloadBase()}-${effectSuffix()}.webm`
       );
       if (wasPaused) v.pause();
       setRecPct(null);
@@ -530,24 +561,57 @@ export default function VideoEffects() {
               Effects
             </div>
             <div className="grid grid-cols-[repeat(auto-fill,minmax(150px,1fr))] gap-2 max-h-76 overflow-y-auto pr-1">
-              {EFFECTS.map((e, i) => (
-                <button
-                  key={e.id}
-                  type="button"
-                  onClick={() => selectEffect(e.id)}
-                  className={`relative w-full h-22 rounded-lg border overflow-hidden cursor-pointer text-left transition-colors duration-150 ${
-                    effectId === e.id
-                      ? 'border-accent ring-1 ring-accent'
-                      : 'border-panel-border hover:border-accent'
-                  }`}
-                  style={cardBackground(e.id, i)}
-                  title={e.blurb}
-                >
-                  <span className="absolute inset-x-0 bottom-0 px-2 pt-6 pb-1.5 font-mono text-[11.5px] text-text bg-gradient-to-t from-black/85 to-transparent">
-                    {e.name}
-                  </span>
-                </button>
-              ))}
+              {EFFECTS.map((e, i) => {
+                const order = enabledIds.indexOf(e.id);
+                const on = order !== -1;
+                return (
+                  <div
+                    key={e.id}
+                    role="button"
+                    tabIndex={0}
+                    onClick={() => cardClick(e.id)}
+                    onKeyDown={(ev) => ev.key === 'Enter' && cardClick(e.id)}
+                    className={`relative w-full h-22 rounded-lg border overflow-hidden cursor-pointer transition-colors duration-150 ${
+                      selectedId === e.id
+                        ? 'border-accent ring-1 ring-accent'
+                        : on
+                          ? 'border-accent'
+                          : 'border-panel-border hover:border-accent'
+                    }`}
+                    style={cardBackground(e.id, i)}
+                    title={e.blurb}
+                  >
+                    <span className="absolute inset-x-0 bottom-0 px-2 pt-6 pb-1.5 font-mono text-[11.5px] text-text bg-gradient-to-t from-black/85 to-transparent">
+                      {e.name}
+                    </span>
+                    {/* Chain position, when several effects are combined. */}
+                    {on && enabledIds.length > 1 && (
+                      <span className="absolute top-1.5 left-1.5 w-4.5 h-4.5 rounded-full bg-accent text-black font-mono text-[10px] flex items-center justify-center">
+                        {order + 1}
+                      </span>
+                    )}
+                    {/* The only control that turns an effect OFF. */}
+                    <button
+                      type="button"
+                      onClick={(ev) => {
+                        ev.stopPropagation();
+                        if (on) disableEffect(e.id);
+                        else enableEffect(e.id);
+                      }}
+                      title={on ? `Turn ${e.name} off` : `Turn ${e.name} on`}
+                      className={`absolute top-1.5 right-1.5 w-8 h-4.5 rounded-full border cursor-pointer transition-colors duration-150 ${
+                        on ? 'bg-accent border-accent' : 'bg-black/70 border-panel-border hover:border-accent'
+                      }`}
+                    >
+                      <span
+                        className={`block w-3 h-3 rounded-full transition-transform duration-150 ${
+                          on ? 'bg-black translate-x-[16px]' : 'bg-text-dim translate-x-[2px]'
+                        }`}
+                      />
+                    </button>
+                  </div>
+                );
+              })}
             </div>
           </div>
         </div>
@@ -558,6 +622,11 @@ export default function VideoEffects() {
               <div className="flex items-center justify-between mb-1.5">
                 <div className="font-mono text-[11px] uppercase tracking-[0.08em] text-text-dim">
                   {effect.name}
+                  {enabledIds.length > 1 && (
+                    <span className="text-accent ml-2">
+                      {enabledIds.indexOf(selectedId) + 1}/{enabledIds.length} in chain
+                    </span>
+                  )}
                 </div>
                 <button
                   type="button"
@@ -585,8 +654,10 @@ export default function VideoEffects() {
               )}
             </div>
           ) : (
-            <div className="px-4 py-6 font-mono text-[12px] text-text-dim text-center">
-              Select an effect to tweak its parameters.
+            <div className="px-4 py-6 font-mono text-[12px] text-text-dim text-center leading-[1.7]">
+              Click an effect to turn it on and tweak its parameters.
+              <br />
+              Enable several to combine them — each feeds into the next.
             </div>
           )}
         </aside>
