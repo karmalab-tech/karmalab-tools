@@ -19,6 +19,26 @@ models (the OpenAI GPT Image ones) additionally bill through your own OpenAI
 account and need an OpenAI key too.
 
 Nothing is stored server-side — no accounts, no tokens, no prompts, no outputs.
+Your generations and their history live in that browser's `localStorage` too.
+
+## Closing the tab doesn't lose a generation
+
+A Replicate prediction keeps running after the tab is gone, so all three tools
+persist the generation in progress as it goes:
+
+- Closing or reloading the tab mid-generation asks you to confirm first.
+- Reopening the tool picks up whatever was still running, refreshes it from
+  Replicate and carries on tracking it.
+- Finished generations go to **History** in the top bar (it appears once there is
+  something in it). Opening one loads it back into the tool and refreshes its
+  status — result links expire after a while, so an older one may no longer play.
+- The browser tab shows the progress (`⏳ 2/6`) and how it ended (`✅` / `⚠️`), so
+  a long batch can be left in a background tab.
+
+Only what is needed to rebuild a card is stored — prompts, prediction ids and
+result URLs. Uploaded start frames and the video chain's extracted frames stay in
+memory: they are far too big for the `localStorage` quota, so a recovered card
+has no thumbnail, and a recovered chain can be watched but not continued.
 
 ## The tools
 

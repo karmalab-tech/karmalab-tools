@@ -6,7 +6,9 @@ import {
   ImageDrop,
   Input,
   Panel,
+  RunHistoryModal,
   Spinner,
+  StatusPill,
   TopBar,
 } from '../shared/components';
 import {
@@ -17,10 +19,10 @@ import {
   MINI_BTN,
   SELECT,
   SELECT_CHEVRON,
-  STATUS_PILL,
 } from '../shared/fields.js';
-import { useUnloadGuard } from '../shared/useUnloadGuard.js';
 import { loadApiKey } from '../shared/apiKey.js';
+import { downloadUrl, downloadZip, triggerDownload } from '../shared/download.js';
+import { useGenerationRun } from '../shared/useGenerationRun.js';
 import {
   VIDEO_POLL,
   createPrediction,
@@ -35,6 +37,7 @@ import {
   defaultOptionValues,
 } from '../shared/videoModels.js';
 import { extractFrame, fetchVideoBlob } from './video/frames.js';
+import { storage } from './video/storage.js';
 
 const MODES = [
   {
@@ -49,22 +52,19 @@ const MODES = [
   },
 ];
 
+// A recovered chain can be watched and downloaded, but not extended: the frame
+// that links one clip to the next is extracted in this tab and never persisted.
+const RESTORE_HINT = 'The chain stopped where the tab closed — start a new one to keep going.';
+
 const frameExt = (dataUri) => {
   const m = /^data:image\/(\w+)/.exec(dataUri || '');
   const type = m ? m[1].toLowerCase() : 'jpeg';
   return type === 'jpeg' ? 'jpg' : type;
 };
 
-const clipNo = (index) => String(index + 1).padStart(2, '0');
+const clipNo = (index) => String((index ?? 0) + 1).padStart(2, '0');
 
-function triggerDownload(href, filename) {
-  const a = document.createElement('a');
-  a.href = href;
-  a.download = filename;
-  document.body.appendChild(a);
-  a.click();
-  a.remove();
-}
+const clipName = (clip) => `${clip.basename || `clip-${clipNo(clip.index)}`}.mp4`;
 
 function FrameThumb({ label, dataUri, filename }) {
   return (
@@ -86,15 +86,19 @@ function FrameThumb({ label, dataUri, filename }) {
 }
 
 function ClipCard({ clip }) {
-  const { index, status, startFrame, endFrame, videoUrl, remoteUrl, error } = clip;
+  const { index, status, startFrame, endFrame, videoUrl, outputUrl, error } = clip;
   const n = clipNo(index);
+  // `videoUrl` is the in-memory blob of a clip generated in this tab; a clip
+  // restored from a previous session plays from Replicate instead.
+  const playable = videoUrl || outputUrl;
+  const restored = status === 'succeeded' && !startFrame && !endFrame;
 
   return (
     <div className="bg-panel-alt border border-panel-border rounded-2xl overflow-hidden flex flex-col">
       <div className="w-full aspect-video bg-black flex items-center justify-center relative overflow-hidden">
-        {status === 'succeeded' && videoUrl ? (
+        {status === 'succeeded' && playable ? (
           <video
-            src={videoUrl}
+            src={playable}
             controls
             playsInline
             className="w-full h-full object-contain block"
@@ -107,43 +111,44 @@ function ClipCard({ clip }) {
       </div>
       <div className="pt-3 px-3.5 pb-3.5 flex flex-col gap-2.5">
         <div className="flex items-center justify-between">
-          <span className="font-mono text-[12px] text-text">Clip {index + 1}</span>
-          <span className={`${STATUS_PILL.base} ${STATUS_PILL[status] || STATUS_PILL.queued}`}>
-            {(status === 'queued' || status === 'running') && (
-              <span
-                className={`w-1.5 h-1.5 rounded-full bg-current ${
-                  status === 'running' ? 'animate-klb-pulse' : ''
-                }`}
-              />
-            )}
-            {status}
-          </span>
+          <span className="font-mono text-[12px] text-text">Clip {(index ?? 0) + 1}</span>
+          <StatusPill status={status} />
         </div>
-        <div className="flex gap-2.5">
-          <FrameThumb
-            label="Start frame"
-            dataUri={startFrame}
-            filename={`clip-${n}-start-frame.${frameExt(startFrame)}`}
-          />
-          <FrameThumb
-            label="End frame"
-            dataUri={endFrame}
-            filename={`clip-${n}-end-frame.${frameExt(endFrame)}`}
-          />
-        </div>
+        {restored ? (
+          <div className="font-mono text-[11px] text-text-dim leading-[1.4]">
+            Recovered from a previous session — its start and end frames were not kept.
+          </div>
+        ) : (
+          <div className="flex gap-2.5">
+            <FrameThumb
+              label="Start frame"
+              dataUri={startFrame}
+              filename={`clip-${n}-start-frame.${frameExt(startFrame)}`}
+            />
+            <FrameThumb
+              label="End frame"
+              dataUri={endFrame}
+              filename={`clip-${n}-end-frame.${frameExt(endFrame)}`}
+            />
+          </div>
+        )}
         {error && <div className="text-[11.5px] text-error leading-[1.4] font-mono">{error}</div>}
         {status === 'succeeded' && (
           <div className="flex gap-1.5 mt-0.5">
-            {remoteUrl && (
-              <a className={MINI_BTN} href={remoteUrl} target="_blank" rel="noopener noreferrer">
+            {outputUrl && (
+              <a className={MINI_BTN} href={outputUrl} target="_blank" rel="noopener noreferrer">
                 Open
               </a>
             )}
-            {videoUrl && (
+            {playable && (
               <button
                 type="button"
                 className={MINI_BTN}
-                onClick={() => triggerDownload(videoUrl, `clip-${n}.mp4`)}
+                onClick={() =>
+                  videoUrl
+                    ? triggerDownload(videoUrl, clipName(clip))
+                    : downloadUrl(outputUrl, clipName(clip))
+                }
               >
                 Video
               </button>
@@ -187,7 +192,6 @@ export default function ContinuousVideoStudio() {
   const [mode, setMode] = useState('auto');
   const [autoSteps, setAutoSteps] = useState('4');
 
-  const [clips, setClips] = useState([]);
   const [phase, setPhase] = useState('idle'); // idle | running | awaiting | done
   // Review mode, set after each clip: { index, startFrame, endFrame, ok }.
   const [pending, setPending] = useState(null);
@@ -198,14 +202,26 @@ export default function ContinuousVideoStudio() {
   const counterRef = useRef(0);
   const blobsRef = useRef(new Map()); // clip id -> video Blob (for the zip)
 
-  const cfg = MODEL_CONFIGS[modelKey];
   const isRunning = phase === 'running';
   const chainActive = phase === 'running' || phase === 'awaiting';
-  const succeededClips = clips.filter((c) => c.status === 'succeeded');
 
-  // The chain lives in this tab: closing it loses the blobs and the end frame
-  // the next clip would start from. Intercept close/reload while it's going.
-  useUnloadGuard(chainActive);
+  // The chain itself — its clips, their persistence, recovering an unfinished
+  // chain when the tab is reopened, the history of past chains, the tab title,
+  // and the warning on closing the tab (`guard` covers a chain paused for a
+  // review, which has an end frame to lose even with nothing in flight).
+  const gen = useGenerationRun({
+    storage,
+    pollOptions: VIDEO_POLL,
+    guard: chainActive,
+    missingOutput: 'No video returned by the model.',
+    restoreHint: RESTORE_HINT,
+    onNotice: (text, isError) => setRunHint({ text, isError }),
+  });
+
+  const cfg = MODEL_CONFIGS[modelKey];
+  const clips = gen.items;
+  const succeededClips = clips.filter((c) => c.status === 'succeeded');
+  const busy = chainActive || gen.refreshing;
 
   function changeModel(nextKey) {
     setModelKey(nextKey);
@@ -218,24 +234,22 @@ export default function ContinuousVideoStudio() {
     setOptionValues((prev) => ({ ...prev, [field.key]: option.value }));
   }
 
-  function updateClip(id, patch) {
-    setClips((prev) => prev.map((c) => (c.id === id ? { ...c, ...patch } : c)));
-  }
-
   // Generate one clip: create + poll the prediction, download the video and
   // pull its frames. Returns { ok, endFrame } — endFrame feeds the next clip.
   async function runClip(index, startFrame, key) {
     const id = `c${++counterRef.current}`;
-    setClips((prev) => [
-      ...prev,
+    gen.appendItems([
       {
         id,
         index,
+        predictionId: null,
         status: 'queued',
+        prompt: prompt.trim(),
+        basename: `clip-${clipNo(index)}`,
         startFrame,
         endFrame: null,
         videoUrl: null,
-        remoteUrl: null,
+        outputUrl: null,
         error: null,
       },
     ]);
@@ -245,37 +259,45 @@ export default function ContinuousVideoStudio() {
         optionValues,
         startFrameDataUri: startFrame,
       });
-      updateClip(id, { status: 'running' });
+      gen.updateItem(id, { status: 'running' });
       const prediction = await createPrediction(modelKey, input, key);
-      updateClip(id, { predictionId: prediction.id });
+      // Storing the prediction id is what makes the clip recoverable: the chain
+      // is persisted on every change, so a closed tab can fetch it back.
+      gen.updateItem(id, { predictionId: prediction.id });
       const finalData = await pollPrediction(
         prediction.id,
         key,
         () => cancelRef.current,
         VIDEO_POLL
       );
-      const remoteUrl = extractOutputUrl(finalData.output);
-      if (!remoteUrl) throw new Error('No video returned by the model.');
+      const outputUrl = extractOutputUrl(finalData.output);
+      if (!outputUrl) throw new Error('No video returned by the model.');
 
-      const blob = await fetchVideoBlob(remoteUrl);
+      const blob = await fetchVideoBlob(outputUrl);
       const videoUrl = URL.createObjectURL(blob);
       blobsRef.current.set(id, blob);
       const endFrame = await extractFrame(videoUrl, 'last');
       // Text-to-video first clip: pull the actual start frame from the video
       // so the downloads always include both frames.
       const actualStart = startFrame || (await extractFrame(videoUrl, 'first'));
-      updateClip(id, {
+      gen.updateItem(id, {
         status: 'succeeded',
         videoUrl,
-        remoteUrl,
+        outputUrl,
         endFrame,
         startFrame: actualStart,
       });
       return { ok: true, endFrame };
     } catch (err) {
-      updateClip(id, { status: 'failed', error: friendlyErrorMessage(err) });
+      gen.updateItem(id, { status: 'failed', error: friendlyErrorMessage(err) });
       return { ok: false, endFrame: null };
     }
+  }
+
+  function endChain(hint) {
+    setPhase('done');
+    gen.finishRun();
+    setRunHint(hint);
   }
 
   async function runAuto(total, initialFrame, key) {
@@ -283,27 +305,23 @@ export default function ContinuousVideoStudio() {
     for (let i = 0; i < total; i++) {
       const res = await runClip(i, frame, key);
       if (cancelRef.current) {
-        setPhase('done');
-        setRunHint({ text: `Cancelled — ${i} of ${total} clips finished.`, isError: false });
+        endChain({ text: `Cancelled — ${i} of ${total} clips finished.`, isError: false });
         return;
       }
       if (!res.ok) {
-        setPhase('done');
-        setRunHint({ text: `Stopped — clip ${i + 1} of ${total} failed.`, isError: true });
+        endChain({ text: `Stopped — clip ${i + 1} of ${total} failed.`, isError: true });
         return;
       }
       frame = res.endFrame;
     }
-    setPhase('done');
-    setRunHint({ text: `All ${total} clips generated — download them below.`, isError: false });
+    endChain({ text: `All ${total} clips generated — download them below.`, isError: false });
   }
 
   async function runReviewStep(index, startFrame, key) {
     const res = await runClip(index, startFrame, key);
     if (cancelRef.current) {
       setPending(null);
-      setPhase('done');
-      setRunHint({ text: 'Cancelled.', isError: false });
+      endChain({ text: 'Cancelled.', isError: false });
       return;
     }
     setPending({ index, startFrame, endFrame: res.endFrame, ok: res.ok });
@@ -319,7 +337,7 @@ export default function ContinuousVideoStudio() {
   }
 
   function startRun() {
-    if (chainActive) return;
+    if (busy) return;
     const key = apiKey.trim();
     if (!key) {
       setRunHint({ text: 'Add your Replicate API token first.', isError: true });
@@ -340,11 +358,12 @@ export default function ContinuousVideoStudio() {
       return;
     }
 
-    // A new chain replaces the previous one — free its blobs and object URLs.
+    // A new chain replaces the previous one (which moves to the history list) —
+    // free its blobs and object URLs.
     clips.forEach((c) => c.videoUrl && URL.revokeObjectURL(c.videoUrl));
     blobsRef.current = new Map();
     counterRef.current = 0;
-    setClips([]);
+    gen.startRun({ title: `Chain · ${cfg.label}`, items: [] });
     setPending(null);
     setDownloadLabel('Download all (.zip)');
     setRunHint({ text: '', isError: false });
@@ -370,7 +389,7 @@ export default function ContinuousVideoStudio() {
   function retryClip() {
     if (!pending) return;
     // Drop the clip being retried before re-running the same step.
-    setClips((prev) => {
+    gen.setItems((prev) => {
       const last = prev[prev.length - 1];
       if (last) {
         if (last.videoUrl) URL.revokeObjectURL(last.videoUrl);
@@ -383,10 +402,9 @@ export default function ContinuousVideoStudio() {
   }
 
   function finishChain() {
-    const done = clips.filter((c) => c.status === 'succeeded').length;
+    const done = succeededClips.length;
     setPending(null);
-    setPhase('done');
-    setRunHint({
+    endChain({
       text: `Chain finished — ${done} ${done === 1 ? 'clip' : 'clips'} generated.`,
       isError: false,
     });
@@ -395,25 +413,26 @@ export default function ContinuousVideoStudio() {
   async function downloadAll() {
     setDownloadLabel('Zipping…');
     try {
-      const { default: JSZip } = await import('jszip');
-      const zip = new JSZip();
+      const entries = [];
       for (const c of succeededClips) {
         const n = clipNo(c.index);
         const blob = blobsRef.current.get(c.id);
-        if (blob) zip.file(`clip-${n}.mp4`, blob);
+        // A clip generated in this tab is already in memory; a recovered one is
+        // fetched back from Replicate.
+        if (blob) entries.push({ name: clipName(c), blob });
+        else if (c.outputUrl) entries.push({ name: clipName(c), url: c.outputUrl });
         if (c.startFrame)
-          zip.file(`clip-${n}-start-frame.${frameExt(c.startFrame)}`, c.startFrame.split(',')[1], {
-            base64: true,
+          entries.push({
+            name: `clip-${n}-start-frame.${frameExt(c.startFrame)}`,
+            base64: c.startFrame.split(',')[1],
           });
         if (c.endFrame)
-          zip.file(`clip-${n}-end-frame.${frameExt(c.endFrame)}`, c.endFrame.split(',')[1], {
-            base64: true,
+          entries.push({
+            name: `clip-${n}-end-frame.${frameExt(c.endFrame)}`,
+            base64: c.endFrame.split(',')[1],
           });
       }
-      const blob = await zip.generateAsync({ type: 'blob' });
-      const url = URL.createObjectURL(blob);
-      triggerDownload(url, 'karmalab-video-chain.zip');
-      URL.revokeObjectURL(url);
+      await downloadZip('karmalab-video-chain.zip', entries);
     } catch (e) {
       alert('Could not build the zip file: ' + e.message);
     }
@@ -427,6 +446,8 @@ export default function ContinuousVideoStudio() {
           active="/video-chain"
           apiKeySet={!!apiKey.trim()}
           onApiKeyClick={() => setKeyModalOpen(true)}
+          historyCount={gen.history.length}
+          onHistoryClick={gen.openHistory}
         />
         <Brand
           title="Continuous Video Studio"
@@ -549,8 +570,8 @@ export default function ContinuousVideoStudio() {
           )}
 
           <div className="flex gap-2.5 items-center mt-4.5">
-            <Button onClick={startRun} disabled={chainActive}>
-              {isRunning ? (
+            <Button onClick={startRun} disabled={busy}>
+              {isRunning || gen.refreshing ? (
                 <>
                   <Spinner variant="dark" /> Generating…
                 </>
@@ -573,13 +594,15 @@ export default function ContinuousVideoStudio() {
             <div className="mt-3.5 border border-warning bg-warning-dim text-warning rounded-xl px-4 py-3 text-[12.5px] font-mono leading-[1.5] flex gap-2.5">
               <span>⚠</span>
               <span>
-                Keep this page open — the chain runs in this tab, and closing it loses the videos
-                and the frame that links one clip to the next.
+                Keep this page open — the chain runs in this tab. Closing it loses the frame that
+                links one clip to the next, so the chain stops there; the clip being generated is
+                picked back up on reload.
               </span>
             </div>
           ) : (
             <div className={`${FIELD_HELP} text-center`}>
-              Once generation starts, don't close this page — the chain runs entirely in this tab.
+              Don't close this page once generation starts — the chain is built in this tab. Past
+              chains stay in History.
             </div>
           )}
           {runHint.text && (
@@ -594,7 +617,7 @@ export default function ContinuousVideoStudio() {
         </Panel>
 
         <Panel
-          title="Clips"
+          title={gen.viewingHistory ? 'Clips · from history' : 'Clips'}
           action={
             succeededClips.length > 0 ? (
               <Button
@@ -657,6 +680,7 @@ export default function ContinuousVideoStudio() {
         onSaved={() => setApiKey(loadApiKey())}
         onClose={() => setKeyModalOpen(false)}
       />
+      <RunHistoryModal {...gen.historyModal} />
     </div>
   );
 }

@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useRef, useState } from 'react';
 import {
   ApiKeyModal,
   Brand,
@@ -6,7 +6,9 @@ import {
   ImageDrop,
   Input,
   Panel,
+  RunHistoryModal,
   Spinner,
+  StatusPill,
   TopBar,
 } from '../shared/components';
 import {
@@ -17,56 +19,42 @@ import {
   MINI_BTN,
   SELECT,
   SELECT_CHEVRON,
-  STATUS_PILL,
 } from '../shared/fields.js';
-import { useUnloadGuard } from '../shared/useUnloadGuard.js';
 import { loadApiKey, loadOpenaiKey } from '../shared/apiKey.js';
+import { downloadUrl, downloadZip } from '../shared/download.js';
+import { useGenerationRun } from '../shared/useGenerationRun.js';
 import { MODEL_CONFIGS, MODEL_KEYS, EXTRA_FIELD_KEYS } from './batch/models.js';
 import {
   MAX_CONCURRENT,
   buildInput,
   createPrediction,
-  getPrediction,
   pollPrediction,
   extractImageUrl,
   friendlyErrorMessage,
 } from './batch/replicate.js';
-import { addJob, loadJobs, loadKey, removeJob, saveKey } from './batch/storage.js';
-
-// Replicate status → the UI's status vocabulary (queued / running / …).
-const uiStatus = (status) =>
-  status === 'processing' ? 'running' : status === 'starting' ? 'queued' : status;
+import { loadKey, saveKey, storage } from './batch/storage.js';
 
 const firstAspect = (modelKey) => MODEL_CONFIGS[modelKey].aspectOptions[0].value;
 
+const pad = (n) => String(n).padStart(2, '0');
+
+const imageName = (item) => `${item.basename || `image-${item.id}`}.png`;
+
 function ResultCard({ result }) {
   const [downloading, setDownloading] = useState(false);
-  const { id, prompt, status, imageUrl, error } = result;
+  const { prompt, status, outputUrl, error } = result;
 
   async function download() {
     setDownloading(true);
-    try {
-      const resp = await fetch(imageUrl);
-      const blob = await resp.blob();
-      const objUrl = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = objUrl;
-      a.download = `karmalab-${id}.png`;
-      document.body.appendChild(a);
-      a.click();
-      a.remove();
-      URL.revokeObjectURL(objUrl);
-    } catch {
-      window.open(imageUrl, '_blank');
-    }
+    await downloadUrl(outputUrl, imageName(result));
     setDownloading(false);
   }
 
   return (
     <div className="bg-panel-alt border border-panel-border rounded-2xl overflow-hidden flex flex-col">
       <div className="w-full aspect-square bg-black flex items-center justify-center relative overflow-hidden">
-        {status === 'succeeded' && imageUrl ? (
-          <img src={imageUrl} alt="" className="w-full h-full object-cover block" />
+        {status === 'succeeded' && outputUrl ? (
+          <img src={outputUrl} alt="" className="w-full h-full object-cover block" />
         ) : status === 'failed' ? (
           <div className="text-error font-mono text-2xl">!</div>
         ) : (
@@ -74,23 +62,14 @@ function ResultCard({ result }) {
         )}
       </div>
       <div className="pt-3 px-3.5 pb-3.5 flex flex-col gap-2">
-        <span className={`${STATUS_PILL.base} ${STATUS_PILL[status] || STATUS_PILL.queued}`}>
-          {(status === 'queued' || status === 'running') && (
-            <span
-              className={`w-1.5 h-1.5 rounded-full bg-current ${
-                status === 'running' ? 'animate-klb-pulse' : ''
-              }`}
-            />
-          )}
-          {status}
-        </span>
+        <StatusPill status={status} />
         <div className="text-[12.5px] text-text-dim leading-[1.4] line-clamp-2" title={prompt}>
           {prompt}
         </div>
         {error && <div className="text-[11.5px] text-error leading-[1.4] font-mono">{error}</div>}
-        {status === 'succeeded' && imageUrl && (
+        {status === 'succeeded' && outputUrl && (
           <div className="flex gap-1.5 mt-0.5">
-            <a className={MINI_BTN} href={imageUrl} target="_blank" rel="noopener noreferrer">
+            <a className={MINI_BTN} href={outputUrl} target="_blank" rel="noopener noreferrer">
               Open
             </a>
             <button type="button" className={MINI_BTN} onClick={download}>
@@ -115,7 +94,6 @@ export default function BatchImageStudio() {
   const [suffix, setSuffix] = useState('');
   const [referenceImage, setReferenceImage] = useState(null); // { dataUri, name }
   const [promptsText, setPromptsText] = useState('');
-  const [results, setResults] = useState([]);
   const [isRunning, setIsRunning] = useState(false);
   const [runHint, setRunHint] = useState({ text: '', isError: false });
   const [downloadLabel, setDownloadLabel] = useState('Download all (.zip)');
@@ -123,18 +101,23 @@ export default function BatchImageStudio() {
   const cancelRef = useRef(false);
   const counterRef = useRef(0);
 
+  // The run itself — its cards, their persistence, recovering an unfinished run
+  // when the tab is reopened, the history of past runs, the tab title and the
+  // warning on closing the tab mid-run.
+  const gen = useGenerationRun({
+    storage,
+    missingOutput: 'No image returned by the model.',
+    onNotice: (text, isError) => setRunHint({ text, isError }),
+  });
+
   const cfg = MODEL_CONFIGS[modelKey];
   const supportsImage = !!cfg.imageField;
   const prompts = promptsText
     .split('\n')
     .map((p) => p.trim())
     .filter(Boolean);
-  const succeededResults = results.filter((r) => r.status === 'succeeded' && r.imageUrl);
-
-  // Closing the tab loses the batch's progress tracking — intercept it while a
-  // run is going (in-flight predictions are recovered on reopen, but finished
-  // results that were never persisted are not).
-  useUnloadGuard(isRunning);
+  const succeeded = gen.items.filter((r) => r.status === 'succeeded' && r.outputUrl);
+  const busy = isRunning || gen.refreshing;
 
   function refreshKeys() {
     setApiKey(loadApiKey());
@@ -151,84 +134,8 @@ export default function BatchImageStudio() {
     saveKey(`extra.${key}`, value.trim());
   }
 
-  function updateResult(id, patch) {
-    setResults((prev) => prev.map((r) => (r.id === id ? { ...r, ...patch } : r)));
-  }
-
-  // On open: if a token is saved and there are pending predictions from a
-  // previous session, load them back (with their prompts) and resume tracking
-  // any that are still in flight. Results are keyed by prediction id here so a
-  // fresh Generate run (keyed r1, r2, …) never collides with a restored one.
-  useEffect(() => {
-    const key = loadApiKey().trim();
-    const jobs = loadJobs();
-    if (!key || !jobs.length) return;
-
-    let stopped = false;
-
-    setResults((prev) => {
-      const known = new Set(prev.map((r) => r.id));
-      const restored = jobs
-        .filter((j) => !known.has(j.predictionId))
-        .map((j) => ({
-          id: j.predictionId,
-          prompt: j.prompt,
-          status: 'running',
-          imageUrl: null,
-          error: null,
-        }));
-      return restored.length ? [...prev, ...restored] : prev;
-    });
-
-    async function resume(job) {
-      const id = job.predictionId;
-      try {
-        const data = await getPrediction(id, key);
-        if (data.status === 'succeeded') {
-          const imageUrl = extractImageUrl(data.output);
-          updateResult(
-            id,
-            imageUrl
-              ? { status: 'succeeded', imageUrl }
-              : { status: 'failed', error: 'No image returned by the model.' }
-          );
-          removeJob(id);
-          return;
-        }
-        if (data.status === 'failed' || data.status === 'canceled') {
-          updateResult(id, { status: 'failed', error: data.error || `Prediction ${data.status}` });
-          removeJob(id);
-          return;
-        }
-        // Still queued/running on Replicate — reflect it and resume polling.
-        updateResult(id, { status: uiStatus(data.status) });
-        const finalData = await pollPrediction(id, key, () => stopped);
-        if (stopped) return;
-        const imageUrl = extractImageUrl(finalData.output);
-        updateResult(
-          id,
-          imageUrl
-            ? { status: 'succeeded', imageUrl }
-            : { status: 'failed', error: 'No image returned by the model.' }
-        );
-        removeJob(id);
-      } catch (err) {
-        if (stopped) return;
-        // Leave the job stored so a later reload can retry (e.g. transient
-        // network/proxy errors); just surface the problem on the card.
-        updateResult(id, { status: 'failed', error: err.message || 'Could not load this job.' });
-      }
-    }
-
-    jobs.forEach(resume);
-    return () => {
-      stopped = true;
-    };
-    // Run once on mount.
-  }, []);
-
   async function handleGenerate() {
-    if (isRunning) return;
+    if (busy) return;
     if (!apiKey.trim()) {
       setRunHint({ text: 'Add your Replicate API token first.', isError: true });
       setKeyModalOpen(true);
@@ -250,17 +157,20 @@ export default function BatchImageStudio() {
     cancelRef.current = false;
     setIsRunning(true);
 
-    const items = prompts.map((prompt) => ({ id: `r${++counterRef.current}`, prompt }));
-    setResults((prev) => [
-      ...prev,
-      ...items.map((it) => ({
-        id: it.id,
-        prompt: it.prompt,
-        status: 'queued',
-        imageUrl: null,
-        error: null,
-      })),
-    ]);
+    // A new run replaces the one on screen, which moves to the history list.
+    const items = prompts.map((prompt, i) => ({
+      id: `r${++counterRef.current}`,
+      predictionId: null,
+      status: 'queued',
+      prompt,
+      basename: `image-${pad(i + 1)}`,
+      outputUrl: null,
+      error: null,
+    }));
+    gen.startRun({
+      title: `${items.length} image${items.length === 1 ? '' : 's'} · ${cfg.label}`,
+      items,
+    });
 
     const modelId = modelKey;
     const key = apiKey.trim();
@@ -275,42 +185,35 @@ export default function BatchImageStudio() {
 
     async function runOne(item) {
       if (cancelRef.current) {
-        updateResult(item.id, { status: 'failed', error: 'Cancelled before it started.' });
+        gen.updateItem(item.id, { status: 'failed', error: 'Cancelled before it started.' });
         return false;
       }
-      updateResult(item.id, { status: 'running' });
-      let predictionId = null;
+      gen.updateItem(item.id, { status: 'running' });
       try {
         const input = buildInput(cfg, { promptText: item.prompt, ...snapshot });
         const prediction = await createPrediction(modelId, input, key);
-        predictionId = prediction.id;
-        // Persist the in-flight prediction so it can be recovered if the tab is
-        // closed before it finishes; the result carries its id for the same run.
-        addJob({ predictionId, prompt: item.prompt });
-        updateResult(item.id, { predictionId });
-        const finalData = await pollPrediction(predictionId, key, () => cancelRef.current);
-        const imageUrl = extractImageUrl(finalData.output);
-        if (!imageUrl) throw new Error('No image returned by the model.');
-        updateResult(item.id, { status: 'succeeded', imageUrl });
-        removeJob(predictionId);
+        // Storing the prediction id is what makes the card recoverable: the run
+        // is persisted on every change, so a closed tab can fetch it back.
+        gen.updateItem(item.id, { predictionId: prediction.id });
+        const finalData = await pollPrediction(prediction.id, key, () => cancelRef.current);
+        const outputUrl = extractImageUrl(finalData.output);
+        if (!outputUrl) throw new Error('No image returned by the model.');
+        gen.updateItem(item.id, { status: 'succeeded', outputUrl });
         return true;
       } catch (err) {
-        updateResult(item.id, { status: 'failed', error: friendlyErrorMessage(err) });
-        // A UI cancel only stops our polling — the prediction is still running on
-        // Replicate, so keep the job to resume it next time. Real failures are done.
-        if (predictionId && !cancelRef.current) removeJob(predictionId);
+        gen.updateItem(item.id, { status: 'failed', error: friendlyErrorMessage(err) });
         return false;
       }
     }
 
     let cursor = 0;
-    let succeeded = 0;
+    let done = 0;
     async function worker() {
       while (cursor < items.length) {
         if (cancelRef.current) return;
         const idx = cursor++;
         const ok = await runOne(items[idx]);
-        if (ok) succeeded += 1;
+        if (ok) done += 1;
       }
     }
     const workers = [];
@@ -318,10 +221,11 @@ export default function BatchImageStudio() {
     await Promise.all(workers);
 
     setIsRunning(false);
+    gen.finishRun();
     setRunHint({
       text: cancelRef.current
-        ? `Cancelled — ${succeeded} of ${items.length} finished.`
-        : `${succeeded} of ${items.length} generated successfully.`,
+        ? `Cancelled — ${done} of ${items.length} finished. Anything still generating on Replicate is picked back up when you reload.`
+        : `${done} of ${items.length} generated successfully.`,
       isError: false,
     });
   }
@@ -334,28 +238,10 @@ export default function BatchImageStudio() {
   async function downloadAll() {
     setDownloadLabel('Zipping…');
     try {
-      const { default: JSZip } = await import('jszip');
-      const zip = new JSZip();
-      await Promise.all(
-        succeededResults.map(async (r, i) => {
-          try {
-            const resp = await fetch(r.imageUrl);
-            const blob = await resp.blob();
-            zip.file(`image-${i + 1}-${r.id}.png`, blob);
-          } catch {
-            /* skip failed fetch */
-          }
-        })
+      await downloadZip(
+        'karmalab-images.zip',
+        succeeded.map((r) => ({ name: imageName(r), url: r.outputUrl }))
       );
-      const blob = await zip.generateAsync({ type: 'blob' });
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = 'karmalab-images.zip';
-      document.body.appendChild(a);
-      a.click();
-      a.remove();
-      URL.revokeObjectURL(url);
     } catch (e) {
       alert('Could not build the zip file: ' + e.message);
     }
@@ -369,6 +255,8 @@ export default function BatchImageStudio() {
           active="/"
           apiKeySet={!!apiKey.trim()}
           onApiKeyClick={() => setKeyModalOpen(true)}
+          historyCount={gen.history.length}
+          onHistoryClick={gen.openHistory}
         />
         <Brand
           title="Batch Image Studio"
@@ -496,8 +384,8 @@ export default function BatchImageStudio() {
           </div>
 
           <div className="flex gap-2.5 items-center mt-4.5">
-            <Button onClick={handleGenerate} disabled={prompts.length == 0 || isRunning}>
-              {isRunning ? (
+            <Button onClick={handleGenerate} disabled={prompts.length == 0 || busy}>
+              {busy ? (
                 <>
                   <Spinner variant="dark" /> Generating…
                 </>
@@ -511,6 +399,10 @@ export default function BatchImageStudio() {
               </Button>
             )}
           </div>
+          <div className={`${FIELD_HELP} text-center mt-2.5`}>
+            Anything still generating when the tab closes is picked back up on reload, and finished
+            runs stay in History.
+          </div>
           {runHint.text && (
             <div
               className={`font-mono text-[11.5px] text-center mt-1 ${
@@ -523,9 +415,9 @@ export default function BatchImageStudio() {
         </Panel>
 
         <Panel
-          title="Results"
+          title={gen.viewingHistory ? 'Results · from history' : 'Results'}
           action={
-            succeededResults.length > 0 ? (
+            succeeded.length > 0 ? (
               <Button
                 variant="secondary"
                 onClick={downloadAll}
@@ -536,13 +428,13 @@ export default function BatchImageStudio() {
             ) : null
           }
         >
-          {results.length === 0 ? (
+          {gen.items.length === 0 ? (
             <div className="text-center px-5 py-10 text-text-dim text-[13.5px] font-mono">
               No images yet — add prompts above and hit generate.
             </div>
           ) : (
             <div className="grid grid-cols-[repeat(auto-fill,minmax(230px,1fr))] gap-3.5 mt-1">
-              {results.map((r) => (
+              {gen.items.map((r) => (
                 <ResultCard key={r.id} result={r} />
               ))}
             </div>
@@ -555,6 +447,7 @@ export default function BatchImageStudio() {
         onSaved={refreshKeys}
         onClose={() => setKeyModalOpen(false)}
       />
+      <RunHistoryModal {...gen.historyModal} />
     </div>
   );
 }
