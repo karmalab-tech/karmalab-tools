@@ -39,7 +39,16 @@ that also proxies the Replicate API.
    `src/shared/videoModels.js` (video — shared by both video tools, so an entry
    there appears in each). The UI rebuilds itself from it; don't special-case a
    model in component code.
-6. **Adding a tool is three edits**: an HTML entry at the root, an input in
+6. **A generation is a "run", and runs are shared machinery.** Every tool
+   normalises its cards to one item shape and drives them through
+   `useGenerationRun` (`src/shared/useGenerationRun.js`), which owns the item
+   list, its persistence, recovering an unfinished run on load, the history of
+   finished runs, the browser tab title and the close-the-tab warning. A tool
+   supplies its inputs, its runner loop and its card component — nothing else.
+   Persisting more per item means adding the key to `PERSISTED_ITEM_KEYS` in
+   `src/shared/runs.js`; that whitelist is what keeps image data URIs out of
+   `localStorage`, so never widen it to a data URI.
+7. **Adding a tool is three edits**: an HTML entry at the root, an input in
    `vite.config.js`, an entry in `server/routes.js`, which is the source of truth
    for which tools exist.
 
@@ -66,9 +75,12 @@ HTML.
   (prediction create / poll / output helpers, the longer polling profile video
   needs, and `friendlyErrorMessage()`), `videoModels.js` (video model catalogue
   and input assembly, shared by both video tools), `storage.js`
-  (`createToolStorage(namespace)` — namespaced `localStorage` plus
-  pending-prediction persistence, one prefix per tool), `apiKey.js`, `fields.js`,
-  `useUnloadGuard.js`.
+  (`createToolStorage(namespace)` — namespaced `localStorage` plus the
+  current-run / run-history persistence, one prefix per tool), `apiKey.js`, `fields.js`,
+  `useUnloadGuard.js`, plus the run machinery: `runs.js` (the run/item model —
+  what is persisted, a run's progress, the tab title), `useGenerationRun.js`
+  (the hook the three tools share) and `download.js` (single-file and zip
+  downloads).
 - `server/` — `index.js` (serves `dist/`, proxies Replicate), `proxy.js` (the
   proxy's request policy), `routes.js` (the route table).
 - `test/` Vitest suites · `docs/` a README screenshot · `Dockerfile` + `fly.toml`
@@ -76,6 +88,31 @@ HTML.
 
 Anything two tools need goes in `src/shared/`, namespaced per tool where it
 touches storage — never reached for across `src/apps/`.
+
+## How a run survives a closed tab
+
+`useGenerationRun` writes the run in progress to `karmalab.<tool>.currentRun` on
+every item change, and moves it to `karmalab.<tool>.runHistory` (newest first,
+capped) once nothing is in flight. On load it reads `currentRun` back: if any item
+is still active the run goes back on screen and each one is fetched from Replicate
+and re-polled; if they all landed, it is archived instead. Opening a run from the
+history modal does the same refresh, writing the result back into its history
+entry.
+
+Two details are easy to get wrong:
+
+- **Archiving waits for the items to settle.** `finishRun()` only requests it;
+  the archive happens in an effect once no item is active, so what history gets
+  is the final state rather than whatever the refs held when the runner
+  returned. Items that never reached a prediction (a cancelled batch leaves
+  some) are closed out there, or a cancelled run would stay "current" forever.
+- **A run is per tab, not per browser.** Two tabs of the same tool share the
+  storage key and will both poll and both write. Nothing corrupts, but the
+  progress in one lags the other; sorting that out means a `storage`-event
+  listener or a lock, and neither is here.
+
+The pre-run-model format (a flat `pendingJobs` list) is migrated into a run on
+first read, so a tab closed before this shipped still recovers.
 
 ## What the proxy allows, and why
 
@@ -106,9 +143,21 @@ gone there.
 
 `yarn test` runs Vitest in the `node` environment, stubbing the browser globals
 the modules touch (`localStorage`, `fetch`). Covered: the proxy's request policy,
-the prediction polling loop, per-model input assembly for images and video,
-namespaced storage and pending-job recovery, and the Batch Video run-item
-flattening including its download filename stems.
+the prediction polling loop, per-model input assembly for images and video, the
+run model (what is persisted, a run's progress, the tab title), namespaced
+storage with its current-run / history persistence and the legacy migration, and
+the Batch Video run-item flattening including its download filename stems.
+
+`useGenerationRun` has no unit coverage — it is a hook over `localStorage`,
+`document.title` and `beforeunload`, and the node test environment has none of
+them. Its behaviour was verified in a real browser (Chromium + Playwright,
+driving the three tools against a stubbed `/v1`): progress and completion in the
+tab title, the run persisted with its prediction ids, no data URIs in what is
+stored, the `beforeunload` guard only while something is in flight, a run
+archived to history with its final statuses, an unfinished run recovered on load
+without creating a new prediction, and reopening a run from history. That script
+is not in the repo — it wants a proper Playwright suite, alongside the one
+`frames.js` needs. Changes to the hook need the same check by hand.
 
 `src/apps/video/frames.js` has **no** automated coverage — jsdom can't decode
 video, so a test there would assert nothing meaningful; it wants a Playwright

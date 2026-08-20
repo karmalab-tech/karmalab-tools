@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useRef, useState } from 'react';
 import {
   ApiKeyModal,
   Brand,
@@ -6,7 +6,9 @@ import {
   ImageDrop,
   ImagesDrop,
   Panel,
+  RunHistoryModal,
   Spinner,
+  StatusPill,
   TopBar,
 } from '../shared/components';
 import {
@@ -17,17 +19,16 @@ import {
   MINI_BTN,
   SELECT,
   SELECT_CHEVRON,
-  STATUS_PILL,
 } from '../shared/fields.js';
-import { useUnloadGuard } from '../shared/useUnloadGuard.js';
 import { loadApiKey } from '../shared/apiKey.js';
+import { downloadUrl, downloadZip } from '../shared/download.js';
+import { useGenerationRun } from '../shared/useGenerationRun.js';
 import {
   MAX_CONCURRENT,
   VIDEO_POLL,
   createPrediction,
   extractOutputUrl,
   friendlyErrorMessage,
-  getPrediction,
   pollPrediction,
 } from '../shared/replicate.js';
 import {
@@ -37,45 +38,26 @@ import {
   defaultOptionValues,
 } from '../shared/videoModels.js';
 import { MODES, buildItems, splitPrompts } from './batchVideo/items.js';
-import { addJob, loadJobs, removeJob } from './batchVideo/storage.js';
+import { storage } from './batchVideo/storage.js';
 
-// Replicate status → the UI's status vocabulary (queued / running / …).
-const uiStatus = (status) =>
-  status === 'processing' ? 'running' : status === 'starting' ? 'queued' : status;
-
-function triggerDownload(href, filename) {
-  const a = document.createElement('a');
-  a.href = href;
-  a.download = filename;
-  document.body.appendChild(a);
-  a.click();
-  a.remove();
-}
+const videoName = (item) => `${item.basename || `video-${item.id}`}.mp4`;
 
 function ResultCard({ result }) {
   const [downloading, setDownloading] = useState(false);
-  const { label, prompt, status, videoUrl, startFrame, basename, error } = result;
+  const { label, prompt, status, outputUrl, startFrame, error } = result;
 
   async function download() {
     setDownloading(true);
-    try {
-      const resp = await fetch(videoUrl);
-      const blob = await resp.blob();
-      const objUrl = URL.createObjectURL(blob);
-      triggerDownload(objUrl, `${basename}.mp4`);
-      URL.revokeObjectURL(objUrl);
-    } catch {
-      window.open(videoUrl, '_blank');
-    }
+    await downloadUrl(outputUrl, videoName(result));
     setDownloading(false);
   }
 
   return (
     <div className="bg-panel-alt border border-panel-border rounded-2xl overflow-hidden flex flex-col">
       <div className="w-full aspect-video bg-black flex items-center justify-center relative overflow-hidden">
-        {status === 'succeeded' && videoUrl ? (
+        {status === 'succeeded' && outputUrl ? (
           <video
-            src={videoUrl}
+            src={outputUrl}
             controls
             playsInline
             className="w-full h-full object-contain block"
@@ -108,26 +90,15 @@ function ResultCard({ result }) {
           >
             {label}
           </span>
-          <span
-            className={`${STATUS_PILL.base} ${STATUS_PILL[status] || STATUS_PILL.queued} shrink-0`}
-          >
-            {(status === 'queued' || status === 'running') && (
-              <span
-                className={`w-1.5 h-1.5 rounded-full bg-current ${
-                  status === 'running' ? 'animate-klb-pulse' : ''
-                }`}
-              />
-            )}
-            {status}
-          </span>
+          <StatusPill status={status} className="shrink-0" />
         </div>
         <div className="text-[12.5px] text-text-dim leading-[1.4] line-clamp-2" title={prompt}>
           {prompt}
         </div>
         {error && <div className="text-[11.5px] text-error leading-[1.4] font-mono">{error}</div>}
-        {status === 'succeeded' && videoUrl && (
+        {status === 'succeeded' && outputUrl && (
           <div className="flex gap-1.5 mt-0.5">
-            <a className={MINI_BTN} href={videoUrl} target="_blank" rel="noopener noreferrer">
+            <a className={MINI_BTN} href={outputUrl} target="_blank" rel="noopener noreferrer">
               Open
             </a>
             <button type="button" className={MINI_BTN} onClick={download}>
@@ -154,7 +125,6 @@ export default function BatchVideoStudio() {
   const [prompt, setPrompt] = useState('');
   const [frames, setFrames] = useState([]); // [{ id, dataUri, name }]
 
-  const [results, setResults] = useState([]);
   const [isRunning, setIsRunning] = useState(false);
   const [runHint, setRunHint] = useState({ text: '', isError: false });
   const [downloadLabel, setDownloadLabel] = useState('Download all (.zip)');
@@ -162,16 +132,23 @@ export default function BatchVideoStudio() {
   const cancelRef = useRef(false);
   const counterRef = useRef(0);
 
+  // The run itself — its cards, their persistence, recovering an unfinished run
+  // when the tab is reopened, the history of past runs, the tab title and the
+  // warning on closing the tab mid-run. Videos take minutes, so recovery is the
+  // normal way a long batch finishes.
+  const gen = useGenerationRun({
+    storage,
+    pollOptions: VIDEO_POLL,
+    missingOutput: 'No video returned by the model.',
+    onNotice: (text, isError) => setRunHint({ text, isError }),
+  });
+
   const cfg = MODEL_CONFIGS[modelKey];
   const byPrompts = mode === 'prompts';
   const prompts = splitPrompts(promptsText);
   const count = byPrompts ? prompts.length : frames.length;
-  const succeededResults = results.filter((r) => r.status === 'succeeded' && r.videoUrl);
-
-  // Closing the tab loses the batch's progress tracking — intercept it while a
-  // run is going (in-flight predictions are recovered on reopen, but finished
-  // results that were never persisted are not).
-  useUnloadGuard(isRunning);
+  const succeeded = gen.items.filter((r) => r.status === 'succeeded' && r.outputUrl);
+  const busy = isRunning || gen.refreshing;
 
   function changeModel(nextKey) {
     setModelKey(nextKey);
@@ -184,84 +161,8 @@ export default function BatchVideoStudio() {
     setOptionValues((prev) => ({ ...prev, [field.key]: option.value }));
   }
 
-  function updateResult(id, patch) {
-    setResults((prev) => prev.map((r) => (r.id === id ? { ...r, ...patch } : r)));
-  }
-
-  // On open: if a token is saved and there are pending predictions from a
-  // previous session, load them back and resume tracking any still in flight.
-  // Videos take minutes, so this is the normal way a long batch finishes.
-  // Results are keyed by prediction id here so a fresh run (keyed r1, r2, …)
-  // never collides with a restored one.
-  useEffect(() => {
-    const key = loadApiKey().trim();
-    const jobs = loadJobs();
-    if (!key || !jobs.length) return;
-
-    let stopped = false;
-
-    setResults((prev) => {
-      const known = new Set(prev.map((r) => r.id));
-      const restored = jobs
-        .filter((j) => !known.has(j.predictionId))
-        .map((j) => ({
-          id: j.predictionId,
-          label: j.label,
-          basename: j.basename,
-          prompt: j.prompt,
-          status: 'running',
-          videoUrl: null,
-          startFrame: null, // start frames are too big to persist
-          error: null,
-        }));
-      return restored.length ? [...prev, ...restored] : prev;
-    });
-
-    async function resume(job) {
-      const id = job.predictionId;
-      const finish = (data) => {
-        const videoUrl = extractOutputUrl(data.output);
-        updateResult(
-          id,
-          videoUrl
-            ? { status: 'succeeded', videoUrl }
-            : { status: 'failed', error: 'No video returned by the model.' }
-        );
-        removeJob(id);
-      };
-      try {
-        const data = await getPrediction(id, key);
-        if (data.status === 'succeeded') {
-          finish(data);
-          return;
-        }
-        if (data.status === 'failed' || data.status === 'canceled') {
-          updateResult(id, { status: 'failed', error: data.error || `Prediction ${data.status}` });
-          removeJob(id);
-          return;
-        }
-        // Still queued/running on Replicate — reflect it and resume polling.
-        updateResult(id, { status: uiStatus(data.status) });
-        const finalData = await pollPrediction(id, key, () => stopped, VIDEO_POLL);
-        if (stopped) return;
-        finish(finalData);
-      } catch (err) {
-        if (stopped) return;
-        // Leave the job stored so a later reload can retry (e.g. transient
-        // network/proxy errors); just surface the problem on the card.
-        updateResult(id, { status: 'failed', error: friendlyErrorMessage(err) });
-      }
-    }
-
-    jobs.forEach(resume);
-    return () => {
-      stopped = true;
-    };
-    // Run once on mount.
-  }, []);
-
   async function handleGenerate() {
-    if (isRunning) return;
+    if (busy) return;
     const key = apiKey.trim();
     if (!key) {
       setRunHint({ text: 'Add your Replicate API token first.', isError: true });
@@ -288,9 +189,14 @@ export default function BatchVideoStudio() {
       }
     }
 
+    // One flat list of run items, whichever mode built them.
     const items = buildItems({ mode, promptsText, sharedFrame, prompt, frames }).map((item) => ({
       ...item,
       id: `r${++counterRef.current}`,
+      predictionId: null,
+      status: 'queued',
+      outputUrl: null,
+      error: null,
     }));
 
     setRunHint({ text: '', isError: false });
@@ -298,30 +204,21 @@ export default function BatchVideoStudio() {
     cancelRef.current = false;
     setIsRunning(true);
 
-    setResults((prev) => [
-      ...prev,
-      ...items.map((it) => ({
-        id: it.id,
-        label: it.label,
-        basename: it.basename,
-        prompt: it.prompt,
-        startFrame: it.startFrame,
-        status: 'queued',
-        videoUrl: null,
-        error: null,
-      })),
-    ]);
+    // A new run replaces the one on screen, which moves to the history list.
+    gen.startRun({
+      title: `${items.length} video${items.length === 1 ? '' : 's'} · ${cfg.label}`,
+      items,
+    });
 
     // The settings can change while the batch runs — freeze what it sends.
     const snapshot = { modelId: modelKey, cfg, optionValues: { ...optionValues } };
 
     async function runOne(item) {
       if (cancelRef.current) {
-        updateResult(item.id, { status: 'failed', error: 'Cancelled before it started.' });
+        gen.updateItem(item.id, { status: 'failed', error: 'Cancelled before it started.' });
         return false;
       }
-      updateResult(item.id, { status: 'running' });
-      let predictionId = null;
+      gen.updateItem(item.id, { status: 'running' });
       try {
         const input = buildVideoInput(snapshot.cfg, {
           prompt: item.prompt,
@@ -329,44 +226,34 @@ export default function BatchVideoStudio() {
           startFrameDataUri: item.startFrame,
         });
         const prediction = await createPrediction(snapshot.modelId, input, key);
-        predictionId = prediction.id;
-        // Persist the in-flight prediction so a closed tab (or a reload during a
+        // Storing the prediction id is what makes the card recoverable: the run
+        // is persisted on every change, so a closed tab (or a reload during a
         // long render) can pick it back up.
-        addJob({
-          predictionId,
-          prompt: item.prompt,
-          label: item.label,
-          basename: item.basename,
-        });
-        updateResult(item.id, { predictionId });
+        gen.updateItem(item.id, { predictionId: prediction.id });
         const finalData = await pollPrediction(
-          predictionId,
+          prediction.id,
           key,
           () => cancelRef.current,
           VIDEO_POLL
         );
-        const videoUrl = extractOutputUrl(finalData.output);
-        if (!videoUrl) throw new Error('No video returned by the model.');
-        updateResult(item.id, { status: 'succeeded', videoUrl });
-        removeJob(predictionId);
+        const outputUrl = extractOutputUrl(finalData.output);
+        if (!outputUrl) throw new Error('No video returned by the model.');
+        gen.updateItem(item.id, { status: 'succeeded', outputUrl });
         return true;
       } catch (err) {
-        updateResult(item.id, { status: 'failed', error: friendlyErrorMessage(err) });
-        // A UI cancel only stops our polling — the prediction is still running on
-        // Replicate, so keep the job to resume it next time. Real failures are done.
-        if (predictionId && !cancelRef.current) removeJob(predictionId);
+        gen.updateItem(item.id, { status: 'failed', error: friendlyErrorMessage(err) });
         return false;
       }
     }
 
     let cursor = 0;
-    let succeeded = 0;
+    let done = 0;
     async function worker() {
       while (cursor < items.length) {
         if (cancelRef.current) return;
         const idx = cursor++;
         const ok = await runOne(items[idx]);
-        if (ok) succeeded += 1;
+        if (ok) done += 1;
       }
     }
     const workers = [];
@@ -374,10 +261,11 @@ export default function BatchVideoStudio() {
     await Promise.all(workers);
 
     setIsRunning(false);
+    gen.finishRun();
     setRunHint({
       text: cancelRef.current
-        ? `Cancelled — ${succeeded} of ${items.length} finished. Anything still rendering on Replicate is picked back up when you reload.`
-        : `${succeeded} of ${items.length} generated successfully.`,
+        ? `Cancelled — ${done} of ${items.length} finished. Anything still rendering on Replicate is picked back up when you reload.`
+        : `${done} of ${items.length} generated successfully.`,
       isError: false,
     });
   }
@@ -390,22 +278,10 @@ export default function BatchVideoStudio() {
   async function downloadAll() {
     setDownloadLabel('Zipping…');
     try {
-      const { default: JSZip } = await import('jszip');
-      const zip = new JSZip();
-      await Promise.all(
-        succeededResults.map(async (r) => {
-          try {
-            const resp = await fetch(r.videoUrl);
-            zip.file(`${r.basename}.mp4`, await resp.blob());
-          } catch {
-            /* skip failed fetch */
-          }
-        })
+      await downloadZip(
+        'karmalab-videos.zip',
+        succeeded.map((r) => ({ name: videoName(r), url: r.outputUrl }))
       );
-      const blob = await zip.generateAsync({ type: 'blob' });
-      const url = URL.createObjectURL(blob);
-      triggerDownload(url, 'karmalab-videos.zip');
-      URL.revokeObjectURL(url);
     } catch (e) {
       alert('Could not build the zip file: ' + e.message);
     }
@@ -419,6 +295,8 @@ export default function BatchVideoStudio() {
           active="/batch-videos"
           apiKeySet={!!apiKey.trim()}
           onApiKeyClick={() => setKeyModalOpen(true)}
+          historyCount={gen.history.length}
+          onHistoryClick={gen.openHistory}
         />
         <Brand
           title="Batch Video Studio"
@@ -557,8 +435,8 @@ export default function BatchVideoStudio() {
           )}
 
           <div className="flex gap-2.5 items-center mt-4.5">
-            <Button onClick={handleGenerate} disabled={prompts.length == 0 || isRunning}>
-              {isRunning ? (
+            <Button onClick={handleGenerate} disabled={count == 0 || busy}>
+              {busy ? (
                 <>
                   <Spinner variant="dark" /> Generating…
                 </>
@@ -576,8 +454,9 @@ export default function BatchVideoStudio() {
           </div>
 
           <div className={`${FIELD_HELP} text-center mt-2.5`}>
-            Video renders take minutes each — {MAX_CONCURRENT} run at a time, and anything still
-            rendering when the tab closes is picked back up on reload.
+            Video renders take minutes each — {MAX_CONCURRENT} run at a time. Anything still
+            rendering when the tab closes is picked back up on reload, and finished runs stay in
+            History.
           </div>
           {runHint.text && (
             <div
@@ -591,9 +470,9 @@ export default function BatchVideoStudio() {
         </Panel>
 
         <Panel
-          title="Results"
+          title={gen.viewingHistory ? 'Results · from history' : 'Results'}
           action={
-            succeededResults.length > 0 ? (
+            succeeded.length > 0 ? (
               <Button
                 variant="secondary"
                 onClick={downloadAll}
@@ -604,13 +483,13 @@ export default function BatchVideoStudio() {
             ) : null
           }
         >
-          {results.length === 0 ? (
+          {gen.items.length === 0 ? (
             <div className="text-center px-5 py-10 text-text-dim text-[13.5px] font-mono">
               No videos yet — set up the batch above and hit generate.
             </div>
           ) : (
             <div className="grid grid-cols-[repeat(auto-fill,minmax(290px,1fr))] gap-3.5 mt-1">
-              {results.map((r) => (
+              {gen.items.map((r) => (
                 <ResultCard key={r.id} result={r} />
               ))}
             </div>
@@ -623,6 +502,7 @@ export default function BatchVideoStudio() {
         onSaved={() => setApiKey(loadApiKey())}
         onClose={() => setKeyModalOpen(false)}
       />
+      <RunHistoryModal {...gen.historyModal} />
     </div>
   );
 }

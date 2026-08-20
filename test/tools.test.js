@@ -1,12 +1,14 @@
 // The tools' own logic: what each model wants as input, what persists between
-// sessions, and how the Batch Video Studio's two modes flatten into one run list.
+// sessions (the run recovered after a closed tab, and the history of finished
+// runs), and how the Batch Video Studio's two modes flatten into one run list.
 // None of it needs a DOM; `localStorage` is stubbed where it is touched.
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { buildInput } from '../src/apps/batch/replicate.js';
 import { buildVideoInput } from '../src/shared/videoModels.js';
-import { addJob, loadJobs, loadKey, removeJob, saveKey } from '../src/apps/batch/storage.js';
-import { createToolStorage } from '../src/shared/storage.js';
+import { loadKey, saveKey, storage } from '../src/apps/batch/storage.js';
+import { HISTORY_LIMIT, createToolStorage } from '../src/shared/storage.js';
+import { runCounts, runStatus, runTabTitle, serializeItem, uiStatus } from '../src/shared/runs.js';
 import { buildItems, splitPrompts } from '../src/apps/batchVideo/items.js';
 
 const base = { promptText: 'a cat', suffix: '', aspect: '1:1', extraValues: {} };
@@ -134,6 +136,127 @@ describe('buildVideoInput', () => {
   });
 });
 
+// The run model the three tools normalise their cards to: what gets persisted,
+// what a run's progress adds up to, and what the browser tab says about it.
+describe('serializeItem', () => {
+  it('keeps the fields a recovered card is rebuilt from', () => {
+    expect(
+      serializeItem({
+        id: 'r1',
+        predictionId: 'p1',
+        status: 'running',
+        prompt: 'a cat',
+        label: 'Video 1',
+        basename: 'video-01',
+        outputUrl: null,
+        error: null,
+        index: 0,
+      })
+    ).toEqual({
+      id: 'r1',
+      predictionId: 'p1',
+      status: 'running',
+      prompt: 'a cat',
+      label: 'Video 1',
+      basename: 'video-01',
+      outputUrl: null,
+      error: null,
+      index: 0,
+    });
+  });
+
+  // The whole point of the whitelist: image data URIs would blow the quota.
+  it('drops in-memory extras like frames and object URLs', () => {
+    const persisted = serializeItem({
+      id: 'c1',
+      status: 'succeeded',
+      startFrame: 'data:image/jpeg;base64,AAA',
+      endFrame: 'data:image/jpeg;base64,BBB',
+      videoUrl: 'blob:http://localhost/abc',
+    });
+    expect(persisted).toEqual({ id: 'c1', status: 'succeeded' });
+  });
+
+  it('omits keys that were never set rather than writing undefined', () => {
+    expect(Object.keys(serializeItem({ id: 'r1', status: 'queued' }))).toEqual(['id', 'status']);
+  });
+});
+
+describe('runCounts', () => {
+  const items = (...statuses) => statuses.map((status, i) => ({ id: `r${i}`, status }));
+
+  it('counts what landed, what failed and what is still going', () => {
+    expect(runCounts(items('succeeded', 'failed', 'running', 'queued'))).toEqual({
+      total: 4,
+      succeeded: 1,
+      failed: 1,
+      done: 2,
+      active: 2,
+    });
+  });
+
+  it('has nothing active once every item is terminal', () => {
+    expect(runCounts(items('succeeded', 'failed')).active).toBe(0);
+  });
+
+  it('handles an empty run', () => {
+    expect(runCounts([])).toEqual({ total: 0, succeeded: 0, failed: 0, done: 0, active: 0 });
+  });
+});
+
+describe('runStatus', () => {
+  const items = (...statuses) => statuses.map((status, i) => ({ id: `r${i}`, status }));
+
+  it('is running while anything is in flight', () => {
+    expect(runStatus(items('succeeded', 'running'))).toBe('running');
+    expect(runStatus(items('failed', 'queued'))).toBe('running');
+  });
+
+  it('is succeeded or failed when the whole run went one way', () => {
+    expect(runStatus(items('succeeded', 'succeeded'))).toBe('succeeded');
+    expect(runStatus(items('failed', 'failed'))).toBe('failed');
+  });
+
+  it('is partial for a mixed result', () => {
+    expect(runStatus(items('succeeded', 'failed'))).toBe('partial');
+  });
+});
+
+describe('runTabTitle', () => {
+  const counts = (over) => ({ total: 6, succeeded: 2, failed: 0, done: 2, active: 4, ...over });
+
+  it('shows the progress while the run is going', () => {
+    expect(runTabTitle('Studio', counts(), false)).toBe('⏳ 2/6 · Studio');
+  });
+
+  it('marks a finished run, and flags one that had failures', () => {
+    const finished = counts({ succeeded: 6, done: 6, active: 0 });
+    expect(runTabTitle('Studio', finished, true)).toBe('✅ 6/6 · Studio');
+    const withFailures = counts({ succeeded: 4, failed: 2, done: 6, active: 0 });
+    expect(runTabTitle('Studio', withFailures, true)).toBe('⚠️ 4/6 · Studio');
+  });
+
+  it('leaves the page title alone when there is nothing to report', () => {
+    expect(runTabTitle('Studio', counts({ succeeded: 6, done: 6, active: 0 }), false)).toBe(
+      'Studio'
+    );
+    expect(runTabTitle('Studio', runCounts([]), true)).toBe('Studio');
+  });
+
+  it('prefers the progress over the finished marker', () => {
+    expect(runTabTitle('Studio', counts(), true)).toBe('⏳ 2/6 · Studio');
+  });
+});
+
+describe('uiStatus', () => {
+  it("maps Replicate's wording onto the UI's", () => {
+    expect(uiStatus('starting')).toBe('queued');
+    expect(uiStatus('processing')).toBe('running');
+    expect(uiStatus('succeeded')).toBe('succeeded');
+    expect(uiStatus('canceled')).toBe('canceled');
+  });
+});
+
 const PREFIX = 'karmalab.batchImageStudio.';
 
 function stubLocalStorage(store = new Map()) {
@@ -144,6 +267,22 @@ function stubLocalStorage(store = new Map()) {
   };
   return store;
 }
+
+const item = (over = {}) => ({
+  id: 'r1',
+  predictionId: 'p1',
+  status: 'running',
+  prompt: 'a cat',
+  ...over,
+});
+
+const run = (over = {}) => ({
+  id: 'run-1',
+  title: '2 images',
+  createdAt: 1700000000000,
+  items: [item()],
+  ...over,
+});
 
 describe('loadKey / saveKey', () => {
   let store;
@@ -169,54 +308,166 @@ describe('loadKey / saveKey', () => {
   });
 });
 
-describe('pending jobs', () => {
+// The run in progress is what a reopened tab recovers from, so what it stores
+// (and what it refuses to store) is the whole feature.
+describe('the current run', () => {
+  let store;
   beforeEach(() => {
-    stubLocalStorage();
+    store = stubLocalStorage();
   });
 
   it('starts empty', () => {
-    expect(loadJobs()).toEqual([]);
+    expect(storage.loadCurrentRun()).toBeNull();
   });
 
-  it('round-trips jobs in insertion order', () => {
-    addJob({ predictionId: 'p1', prompt: 'a cat' });
-    addJob({ predictionId: 'p2', prompt: 'a dog' });
-    expect(loadJobs()).toEqual([
-      { predictionId: 'p1', prompt: 'a cat' },
-      { predictionId: 'p2', prompt: 'a dog' },
-    ]);
+  it('round-trips a run with its items', () => {
+    storage.saveCurrentRun(run());
+    expect(storage.loadCurrentRun()).toEqual({
+      id: 'run-1',
+      title: '2 images',
+      createdAt: 1700000000000,
+      finishedAt: null,
+      items: [item()],
+    });
   });
 
-  it('replaces rather than duplicates a job with the same prediction id', () => {
-    addJob({ predictionId: 'p1', prompt: 'first' });
-    addJob({ predictionId: 'p1', prompt: 'second' });
-    expect(loadJobs()).toEqual([{ predictionId: 'p1', prompt: 'second' }]);
+  it('namespaces the entry it writes', () => {
+    storage.saveCurrentRun(run());
+    expect(store.has(`${PREFIX}currentRun`)).toBe(true);
   });
 
-  it('removes a job by prediction id and leaves the others', () => {
-    addJob({ predictionId: 'p1' });
-    addJob({ predictionId: 'p2' });
-    removeJob('p1');
-    expect(loadJobs()).toEqual([{ predictionId: 'p2' }]);
-  });
-
-  it('clears the storage entry once the last job is removed', () => {
-    const store = stubLocalStorage();
-    addJob({ predictionId: 'p1' });
-    removeJob('p1');
-    expect(store.has(`${PREFIX}pendingJobs`)).toBe(false);
+  it('clears the entry', () => {
+    storage.saveCurrentRun(run());
+    storage.clearCurrentRun();
+    expect(store.has(`${PREFIX}currentRun`)).toBe(false);
+    expect(storage.loadCurrentRun()).toBeNull();
   });
 
   it('recovers from corrupt stored JSON instead of throwing', () => {
-    const store = stubLocalStorage();
-    store.set(`${PREFIX}pendingJobs`, '{not json');
-    expect(loadJobs()).toEqual([]);
+    store.set(`${PREFIX}currentRun`, '{not json');
+    expect(storage.loadCurrentRun()).toBeNull();
   });
 
-  it('ignores stored data that is not an array', () => {
-    const store = stubLocalStorage();
-    store.set(`${PREFIX}pendingJobs`, '{"predictionId":"p1"}');
-    expect(loadJobs()).toEqual([]);
+  it('ignores a stored run with no usable items', () => {
+    store.set(`${PREFIX}currentRun`, JSON.stringify({ id: 'run-1', items: 'nope' }));
+    expect(storage.loadCurrentRun()).toBeNull();
+    store.set(`${PREFIX}currentRun`, JSON.stringify({ id: 'run-1', items: [{}, null] }));
+    expect(storage.loadCurrentRun()).toBeNull();
+  });
+
+  it('fills in the metadata a hand-edited entry is missing', () => {
+    store.set(`${PREFIX}currentRun`, JSON.stringify({ items: [item()] }));
+    const loaded = storage.loadCurrentRun();
+    expect(loaded.id).toMatch(/^run-/);
+    expect(loaded.title).toBe('Generation');
+    expect(Number.isFinite(loaded.createdAt)).toBe(true);
+  });
+});
+
+describe('run history', () => {
+  let store;
+  beforeEach(() => {
+    store = stubLocalStorage();
+  });
+
+  it('starts empty', () => {
+    expect(storage.loadHistory()).toEqual([]);
+  });
+
+  it('archiving moves the current run into history', () => {
+    storage.saveCurrentRun(run());
+    storage.archiveRun(run({ finishedAt: 1700000001000 }));
+    expect(store.has(`${PREFIX}currentRun`)).toBe(false);
+    expect(storage.loadHistory().map((r) => r.id)).toEqual(['run-1']);
+    expect(storage.loadHistory()[0].finishedAt).toBe(1700000001000);
+  });
+
+  it('keeps the newest run first', () => {
+    storage.archiveRun(run({ id: 'run-1' }));
+    storage.archiveRun(run({ id: 'run-2' }));
+    expect(storage.loadHistory().map((r) => r.id)).toEqual(['run-2', 'run-1']);
+  });
+
+  it('replaces rather than duplicates a run archived twice', () => {
+    storage.archiveRun(run({ id: 'run-1', title: 'first' }));
+    storage.archiveRun(run({ id: 'run-1', title: 'second' }));
+    const history = storage.loadHistory();
+    expect(history).toHaveLength(1);
+    expect(history[0].title).toBe('second');
+  });
+
+  it('caps the list so it cannot grow without bound', () => {
+    for (let i = 0; i < HISTORY_LIMIT + 5; i++) storage.archiveRun(run({ id: `run-${i}` }));
+    const history = storage.loadHistory();
+    expect(history).toHaveLength(HISTORY_LIMIT);
+    // Newest kept, oldest dropped.
+    expect(history[0].id).toBe(`run-${HISTORY_LIMIT + 4}`);
+    expect(history.some((r) => r.id === 'run-0')).toBe(false);
+  });
+
+  it('writes back a refreshed run that is already in history', () => {
+    storage.archiveRun(run({ id: 'run-1' }));
+    storage.updateHistoryRun(run({ id: 'run-1', items: [item({ status: 'succeeded' })] }));
+    expect(storage.loadHistory()[0].items[0].status).toBe('succeeded');
+  });
+
+  it('does not add a run that is not in history yet', () => {
+    storage.updateHistoryRun(run({ id: 'run-9' }));
+    expect(storage.loadHistory()).toEqual([]);
+  });
+
+  it('clears the whole list', () => {
+    storage.archiveRun(run());
+    storage.clearHistory();
+    expect(storage.loadHistory()).toEqual([]);
+    expect(store.has(`${PREFIX}runHistory`)).toBe(false);
+  });
+
+  it('drops entries it cannot make sense of', () => {
+    store.set(`${PREFIX}runHistory`, JSON.stringify([run(), null, { items: [] }]));
+    expect(storage.loadHistory()).toHaveLength(1);
+  });
+});
+
+// Tabs closed before the run model shipped left a flat list of pending jobs.
+describe('migrating pre-run-model pending jobs', () => {
+  let store;
+  beforeEach(() => {
+    store = stubLocalStorage();
+  });
+
+  it('reads them back as one recovered run', () => {
+    store.set(
+      `${PREFIX}pendingJobs`,
+      JSON.stringify([
+        { predictionId: 'p1', prompt: 'a cat' },
+        { predictionId: 'p2', prompt: 'a dog', label: 'Video 2', basename: 'video-02' },
+      ])
+    );
+    const recovered = storage.loadCurrentRun();
+    expect(recovered.items.map((i) => i.predictionId)).toEqual(['p1', 'p2']);
+    expect(recovered.items[0].status).toBe('running');
+    expect(recovered.items[1].basename).toBe('video-02');
+  });
+
+  it('drops the old entry so it is only recovered once', () => {
+    store.set(`${PREFIX}pendingJobs`, JSON.stringify([{ predictionId: 'p1' }]));
+    expect(storage.loadCurrentRun()).not.toBeNull();
+    expect(store.has(`${PREFIX}pendingJobs`)).toBe(false);
+    expect(storage.loadCurrentRun()).toBeNull();
+  });
+
+  it('ignores an empty or unusable entry', () => {
+    store.set(`${PREFIX}pendingJobs`, '[]');
+    expect(storage.loadCurrentRun()).toBeNull();
+    store.set(`${PREFIX}pendingJobs`, '{not json');
+    expect(storage.loadCurrentRun()).toBeNull();
+  });
+
+  it('prefers a real current run over the legacy entry', () => {
+    storage.saveCurrentRun(run());
+    store.set(`${PREFIX}pendingJobs`, JSON.stringify([{ predictionId: 'legacy' }]));
+    expect(storage.loadCurrentRun().id).toBe('run-1');
   });
 });
 
@@ -238,10 +489,33 @@ describe('when localStorage is unavailable', () => {
 
   it('degrades quietly rather than breaking the tool', () => {
     expect(loadKey('model')).toBe('');
-    expect(loadJobs()).toEqual([]);
+    expect(storage.loadCurrentRun()).toBeNull();
+    expect(storage.loadHistory()).toEqual([]);
     expect(() => saveKey('model', 'flux')).not.toThrow();
-    expect(() => addJob({ predictionId: 'p1' })).not.toThrow();
-    expect(() => removeJob('p1')).not.toThrow();
+    expect(() => storage.saveCurrentRun(run())).not.toThrow();
+    expect(() => storage.archiveRun(run())).not.toThrow();
+    expect(() => storage.clearHistory()).not.toThrow();
+  });
+});
+
+// Over quota, keeping the newest runs beats losing the write entirely.
+describe('when storage is over quota', () => {
+  it('retries the history write with fewer runs', () => {
+    const store = new Map();
+    let allow = false;
+    globalThis.localStorage = {
+      getItem: (k) => (store.has(k) ? store.get(k) : null),
+      setItem: (k, v) => {
+        // Reject the first (full) write of each save, accept the retry.
+        allow = !allow;
+        if (allow) throw new Error('QuotaExceededError');
+        store.set(k, String(v));
+      },
+      removeItem: (k) => store.delete(k),
+    };
+    const tool = createToolStorage('quotaTest');
+    tool.saveHistory([run({ id: 'a' }), run({ id: 'b' }), run({ id: 'c' }), run({ id: 'd' })]);
+    expect(tool.loadHistory().map((r) => r.id)).toEqual(['a', 'b']);
   });
 });
 
@@ -267,20 +541,21 @@ describe('createToolStorage namespacing', () => {
     expect(videos.loadKey('model')).toBe('veo');
   });
 
-  it("keeps two tools' pending jobs apart", () => {
+  it("keeps two tools' runs and history apart", () => {
     const images = createToolStorage('batchImageStudio');
     const videos = createToolStorage('batchVideoStudio');
 
-    images.addJob({ predictionId: 'img1' });
-    videos.addJob({ predictionId: 'vid1' });
+    images.saveCurrentRun(run({ id: 'img-run' }));
+    videos.saveCurrentRun(run({ id: 'vid-run' }));
+    expect(images.loadCurrentRun().id).toBe('img-run');
+    expect(videos.loadCurrentRun().id).toBe('vid-run');
 
-    expect(images.loadJobs()).toEqual([{ predictionId: 'img1' }]);
-    expect(videos.loadJobs()).toEqual([{ predictionId: 'vid1' }]);
-
-    // Clearing one tool's jobs must leave the other's alone.
-    images.removeJob('img1');
-    expect(images.loadJobs()).toEqual([]);
-    expect(videos.loadJobs()).toEqual([{ predictionId: 'vid1' }]);
+    images.archiveRun(run({ id: 'img-run' }));
+    expect(images.loadCurrentRun()).toBeNull();
+    expect(images.loadHistory().map((r) => r.id)).toEqual(['img-run']);
+    // Archiving one tool's run must leave the other's alone.
+    expect(videos.loadCurrentRun().id).toBe('vid-run');
+    expect(videos.loadHistory()).toEqual([]);
   });
 });
 

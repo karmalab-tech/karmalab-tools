@@ -1,14 +1,10 @@
-// Batch-specific Replicate input assembly. The generic API helpers (create /
-// poll / fetch predictions) live in src/shared/replicate.js and are shared
-// with the Continuous Video Studio — re-exported here so the Batch Studio
-// keeps a single import site.
+// Batch-specific Replicate input assembly. The generic API helpers (create and
+// poll predictions) live in src/shared/replicate.js and are shared with the
+// video tools — re-exported here so the Batch Studio keeps a single import site.
 
 export {
   MAX_CONCURRENT,
-  POLL_INTERVAL_MS,
-  POLL_TIMEOUT_MS,
   createPrediction,
-  getPrediction,
   pollPrediction,
   friendlyErrorMessage,
   extractOutputUrl as extractImageUrl,
