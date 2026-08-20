@@ -1,0 +1,62 @@
+name: Deploy
+
+# Deploy to fly.io once CI is green on main. Gating on the CI run rather than
+# deploying straight off the push keeps a red main from reaching production.
+#
+# This repo is public, so the trigger matters more than usual:
+#   - `workflow_run` fires only for runs of *this* repo's CI, and pull requests
+#     from forks run without access to secrets. So a fork can neither read
+#     FLY_API_TOKEN nor cause a deploy — only a commit that lands on main can.
+#   - The repository guard below stops forks from failing this job for want of
+#     a token they were never meant to have.
+
+on:
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+    branches: [main]
+
+# Nothing here needs to write to the repo.
+permissions:
+  contents: read
+
+# One deploy at a time, and never cancel one half-done.
+concurrency:
+  group: deploy-fly
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    name: fly deploy
+    runs-on: ubuntu-latest
+    if: >-
+      github.repository == 'karmalab-tech/karmalab-tools' &&
+      github.event.workflow_run.event == 'push' &&
+      github.event.workflow_run.conclusion == 'success'
+    # Optional but useful: gives the deploy a place to hang required reviewers
+    # or environment-scoped secrets. Harmless with no protection rules set.
+    environment: production
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # A workflow_run job defaults to the default branch, so check out the
+          # exact commit CI passed on.
+          ref: ${{ github.event.workflow_run.head_sha }}
+
+      - uses: superfly/flyctl-actions/setup-flyctl@master
+
+      # --remote-only builds the image on fly.io's builders, so the runner needs
+      # neither Docker layer cache nor registry credentials of its own.
+      #
+      # The app name comes from fly.toml. Set a FLY_APP repository variable to
+      # override it, which is what a fork with its own app wants.
+      - name: Deploy
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+          FLY_APP: ${{ vars.FLY_APP }}
+        run: |
+          if [ -n "$FLY_APP" ]; then
+            flyctl deploy --remote-only --app "$FLY_APP"
+          else
+            flyctl deploy --remote-only
+          fi

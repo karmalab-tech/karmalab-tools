@@ -84,7 +84,8 @@ HTML.
 - `server/` — `index.js` (serves `dist/`, proxies Replicate), `proxy.js` (the
   proxy's request policy), `routes.js` (the route table).
 - `test/` Vitest suites · `docs/` a README screenshot · `Dockerfile` + `fly.toml`
-  fly.io deployment.
+  fly.io deployment · `.github/workflows/` CI on every push and pull request,
+  and a fly.io deploy gated on CI passing on `main`.
 
 Anything two tools need goes in `src/shared/`, namespaced per tool where it
 touches storage — never reached for across `src/apps/`.

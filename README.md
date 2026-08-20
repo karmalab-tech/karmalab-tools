@@ -114,6 +114,22 @@ first. Any host that can run a Node container works; the runtime needs no
 `node_modules`, since the server uses only Node core modules. Set `PORT` to
 choose the port (`fly.toml` uses 8080).
 
+`.github/workflows/deploy.yml` deploys on every commit that lands on `main` and
+passes CI. To point it at your own app:
+
+1. Create a token scoped to that one app — not an account-wide one:
+   `fly tokens create deploy -a <your-app>`.
+2. Add it as the `FLY_API_TOKEN` repository secret (_Settings → Secrets and
+   variables → Actions_).
+3. If your app name differs from the one in `fly.toml`, add a `FLY_APP`
+   repository _variable_ alongside it. Variables are public, so the name is
+   fine there; the token is not.
+
+A fork gets the workflow but not the secret, and the job is guarded on the
+repository name so it skips rather than fails. Nothing a pull request can do
+reaches the token: `workflow_run` only fires for this repo's own CI runs, and
+fork pull requests run without secrets at all.
+
 ## Contributing
 
 Welcome — adding a model is one entry in a config file, and adding a whole tool
