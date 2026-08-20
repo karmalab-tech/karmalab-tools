@@ -6,6 +6,7 @@
 # and deploy with `fly deploy`.
 #
 # See https://fly.io/docs/reference/configuration/ for the full reference.
+# 
 
 app = 'karmalab-tools'
 primary_region = 'cdg'
