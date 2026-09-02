@@ -23,7 +23,7 @@ Your generations and their history live in that browser's `localStorage` too.
 
 ## Closing the tab doesn't lose a generation
 
-A Replicate prediction keeps running after the tab is gone, so all three tools
+A Replicate prediction keeps running after the tab is gone, so every tool
 persist the generation in progress as it goes:
 
 - Closing or reloading the tab mid-generation asks you to confirm first.
@@ -38,7 +38,10 @@ persist the generation in progress as it goes:
 Only what is needed to rebuild a card is stored — prompts, prediction ids and
 result URLs. Uploaded start frames and the video chain's extracted frames stay in
 memory: they are far too big for the `localStorage` quota, so a recovered card
-has no thumbnail, and a recovered chain can be watched but not continued.
+has no thumbnail, and a recovered video chain can be watched but not continued.
+An image chain is the exception: each step's reference is the previous step's
+result URL, which _is_ stored, so a recovered image chain carries on from where
+it stopped (until those links expire).
 
 ## The tools
 
@@ -48,6 +51,14 @@ has no thumbnail, and a recovered chain can be watched but not continued.
   in-flight generations so closing the tab and coming back resumes them.
   Models: GPT Image 1 and 2, Flux 1.1 Pro, Flux Kontext Pro, Ideogram v3 Turbo,
   Recraft v3, Stable Diffusion 3.5 Large.
+- **Image Chain Studio** (`/image-chain`) — chains images instead of batching
+  them: the first step is generated from your prompt (and an optional reference
+  image), and every step after it is generated from the image the step before it
+  produced. Pick how many steps to run; each one shows up as its own card, and
+  the whole chain downloads as a zip. When it finishes, running it again adds
+  more steps to the same chain, continuing from its last image — including after
+  a reload, since what links two steps is a result URL rather than an in-memory
+  frame. Models: the image models that take a reference image.
 - **Batch Video Studio** (`/batch-videos`) — the same idea for video, in two
   modes: one video per prompt line (with an optional shared start frame), or one
   video per uploaded start frame from a single prompt.

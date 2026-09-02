@@ -30,7 +30,9 @@ settles formatting — don't hand-format against it.
 
 One entry in a config file; the UI rebuilds itself from it.
 
-- Images: `src/apps/batch/models.js`
+- Images: `src/shared/imageModels.js` — shared by the Batch Image Studio and the
+  Image Chain Studio, so one entry appears in each. A model without an
+  `imageField` can't be chained and is left out of the chain tool.
 - Video: `src/shared/videoModels.js` — shared by both video tools, so one entry
   appears in each. Check it works in both.
 

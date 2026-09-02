@@ -9,7 +9,7 @@ import {
 import { isActiveItem, newRunId, runCounts, runTabTitle, serializeRun, uiStatus } from './runs.js';
 import { useUnloadGuard } from './useUnloadGuard.js';
 
-// Everything the three generation tools share about a run: the item list, its
+// Everything the generation tools share about a run: the item list, its
 // persistence, recovering an unfinished run on load, the history of finished
 // runs, the tab title and the close-the-tab warning. Each tool keeps its own
 // inputs and its own runner loop, and calls in here for the rest.
@@ -18,6 +18,7 @@ import { useUnloadGuard } from './useUnloadGuard.js';
 //   gen.startRun({ title, items });   // begins a run (archives the last one)
 //   gen.updateItem(id, patch);        // as each prediction progresses
 //   gen.finishRun();                  // the runner is done
+//   gen.continueRun();                // reopen the finished run to add to it
 //
 // Options:
 //   storage       — a createToolStorage(namespace) instance (one per tool)
@@ -245,6 +246,19 @@ export function useGenerationRun({
     [archive]
   );
 
+  // Take the run on screen back off the shelf so more items can be added to it:
+  // the Image Chain Studio continuing a finished chain from its last image. The
+  // run keeps its id, so archiving it again replaces its history entry rather
+  // than leaving a shorter copy behind, and it goes back to being the run a
+  // reload recovers.
+  const continueRun = useCallback(() => {
+    const current = runRef.current;
+    if (!current || current.origin === 'live') return;
+    const meta = { ...current, origin: 'live', finishedAt: null };
+    runRef.current = meta;
+    setRun(meta);
+  }, []);
+
   // Open a finished run: show its items again and refresh them, so anything
   // that moved on since it was archived comes back with its current state.
   //
@@ -308,6 +322,7 @@ export function useGenerationRun({
     history,
     startRun,
     finishRun: requestFinish,
+    continueRun,
     viewingHistory: run?.origin === 'history',
     openHistory: () => setHistoryOpen(true),
     historyModal: {

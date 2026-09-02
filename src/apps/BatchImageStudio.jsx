@@ -23,15 +23,19 @@ import {
 import { loadApiKey, loadOpenaiKey } from '../shared/apiKey.js';
 import { downloadUrl, downloadZip } from '../shared/download.js';
 import { useGenerationRun } from '../shared/useGenerationRun.js';
-import { MODEL_CONFIGS, MODEL_KEYS, EXTRA_FIELD_KEYS } from './batch/models.js';
+import {
+  MODEL_CONFIGS,
+  MODEL_KEYS,
+  EXTRA_FIELD_KEYS,
+  buildImageInput,
+} from '../shared/imageModels.js';
 import {
   MAX_CONCURRENT,
-  buildInput,
   createPrediction,
   pollPrediction,
-  extractImageUrl,
+  extractOutputUrl,
   friendlyErrorMessage,
-} from './batch/replicate.js';
+} from '../shared/replicate.js';
 import { loadKey, saveKey, storage } from './batch/storage.js';
 
 const firstAspect = (modelKey) => MODEL_CONFIGS[modelKey].aspectOptions[0].value;
@@ -177,9 +181,9 @@ export default function BatchImageStudio() {
     const snapshot = {
       suffix,
       aspect,
-      referenceImageDataUri: referenceImage?.dataUri || null,
+      referenceImage: referenceImage?.dataUri || null,
       // The OpenAI key lives in the shared key storage, not extraValues —
-      // merge it in so buildInput picks it up like any other extra field.
+      // merge it in so buildImageInput picks it up like any other extra field.
       extraValues: { ...extraValues, openai_api_key: openaiKey },
     };
 
@@ -190,13 +194,13 @@ export default function BatchImageStudio() {
       }
       gen.updateItem(item.id, { status: 'running' });
       try {
-        const input = buildInput(cfg, { promptText: item.prompt, ...snapshot });
+        const input = buildImageInput(cfg, { promptText: item.prompt, ...snapshot });
         const prediction = await createPrediction(modelId, input, key);
         // Storing the prediction id is what makes the card recoverable: the run
         // is persisted on every change, so a closed tab can fetch it back.
         gen.updateItem(item.id, { predictionId: prediction.id });
         const finalData = await pollPrediction(prediction.id, key, () => cancelRef.current);
-        const outputUrl = extractImageUrl(finalData.output);
+        const outputUrl = extractOutputUrl(finalData.output);
         if (!outputUrl) throw new Error('No image returned by the model.');
         gen.updateItem(item.id, { status: 'succeeded', outputUrl });
         return true;

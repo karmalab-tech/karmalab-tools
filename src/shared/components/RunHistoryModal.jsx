@@ -5,7 +5,7 @@ import { StatusPill } from './StatusPill.jsx';
 import { FIELD_HELP } from '../fields.js';
 import { formatRunTime, runCounts, runStatus, runSummary } from '../runs.js';
 
-// The history of finished generations, shared by the three tools. Runs come
+// The history of finished generations, shared by the generation tools. Runs come
 // from localStorage (see src/shared/runs.js), newest first; picking one loads it
 // back into the tool, which then refreshes each item's status from Replicate.
 export function RunHistoryModal({ open, runs, currentRunId, onSelect, onClose, onClear }) {

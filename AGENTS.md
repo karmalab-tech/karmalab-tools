@@ -11,6 +11,9 @@ that also proxies the Replicate API.
 
 - **Batch Image Studio** (`/`) — one image per text prompt, in batch. The
   flagship tool.
+- **Image Chain Studio** (`/image-chain`) — chains images: each step is
+  generated from the previous step's image as its reference. Run it again and it
+  adds more steps to the same chain, continuing from its last image.
 - **Batch Video Studio** (`/batch-videos`) — a batch of videos: one per prompt
   line, or one per uploaded start frame. Both modes flatten to one list of run
   items in `src/apps/batchVideo/items.js`.
@@ -35,16 +38,20 @@ that also proxies the Replicate API.
 4. **Tailwind utilities only.** Tokens are in `@theme` in
    `src/shared/theme.css`; there are no co-located `.css` files. Pull long
    repeated class strings into a local const or a variant map.
-5. **Adding a model is one entry** in `src/apps/batch/models.js` (images) or
-   `src/shared/videoModels.js` (video — shared by both video tools, so an entry
-   there appears in each). The UI rebuilds itself from it; don't special-case a
-   model in component code.
+5. **Adding a model is one entry** in `src/shared/imageModels.js` (images) or
+   `src/shared/videoModels.js` (video). Both catalogues are shared by two tools,
+   so an entry appears in each — an image model without an `imageField` is left
+   out of the Image Chain Studio, which has nothing to chain through. The UI
+   rebuilds itself from the entry; don't special-case a model in component code.
 6. **A generation is a "run", and runs are shared machinery.** Every tool
    normalises its cards to one item shape and drives them through
    `useGenerationRun` (`src/shared/useGenerationRun.js`), which owns the item
    list, its persistence, recovering an unfinished run on load, the history of
    finished runs, the browser tab title and the close-the-tab warning. A tool
    supplies its inputs, its runner loop and its card component — nothing else.
+   (`continueRun()` is the one exception to a run being over when it is
+   archived: it takes the finished run back off the shelf, under the same id, so
+   the Image Chain Studio can append more steps to it.)
    Persisting more per item means adding the key to `PERSISTED_ITEM_KEYS` in
    `src/shared/runs.js`; that whitelist is what keeps image data URIs out of
    `localStorage`, so never widen it to a data URI.
@@ -63,23 +70,24 @@ HTML.
 
 ## Layout
 
-- `index.html` / `batch-videos.html` / `video-chain.html` / `prompt.html` —
-  Vite HTML entries, each loading a script from `src/entries/`.
-- `src/apps/` — the tools. Per-tool logic in `src/apps/batch/` (`models.js`,
-  `replicate.js`, `storage.js`), `src/apps/batchVideo/` (`items.js`,
-  `storage.js`) and `src/apps/video/` (`frames.js` — end-frame extraction via
-  off-screen `<video>` + canvas).
+- `index.html` / `image-chain.html` / `batch-videos.html` / `video-chain.html` /
+  `prompt.html` — Vite HTML entries, each loading a script from `src/entries/`.
+- `src/apps/` — the tools. Per-tool logic in `src/apps/batch/` (`storage.js`),
+  `src/apps/imageChain/` (`chain.js` — the step model, `storage.js`),
+  `src/apps/batchVideo/` (`items.js`, `storage.js`) and `src/apps/video/`
+  (`frames.js` — end-frame extraction via off-screen `<video>` + canvas).
 - `src/shared/` — what the tools are built from: `theme.css` (the Tailwind
   entry — `@theme` tokens, base styles, keyframes), `components/` (import from
   `src/shared/components`, which also pulls in `theme.css`), `replicate.js`
   (prediction create / poll / output helpers, the longer polling profile video
-  needs, and `friendlyErrorMessage()`), `videoModels.js` (video model catalogue
-  and input assembly, shared by both video tools), `storage.js`
+  needs, and `friendlyErrorMessage()`), `imageModels.js` and `videoModels.js`
+  (the model catalogues and their input assembly, one per medium and each shared
+  by two tools), `storage.js`
   (`createToolStorage(namespace)` — namespaced `localStorage` plus the
   current-run / run-history persistence, one prefix per tool), `apiKey.js`, `fields.js`,
   `useUnloadGuard.js`, plus the run machinery: `runs.js` (the run/item model —
   what is persisted, a run's progress, the tab title), `useGenerationRun.js`
-  (the hook the three tools share) and `download.js` (single-file and zip
+  (the hook every generation tool shares) and `download.js` (single-file and zip
   downloads).
 - `server/` — `index.js` (serves `dist/`, proxies Replicate), `proxy.js` (the
   proxy's request policy), `routes.js` (the route table).
@@ -114,6 +122,16 @@ Two details are easy to get wrong:
 The pre-run-model format (a flat `pendingJobs` list) is migrated into a run on
 first read, so a tab closed before this shipped still recovers.
 
+The Image Chain Studio is the one tool that can add to a finished run:
+`continueRun()` flips the archived run back to live, keeping its id, and the new
+steps are appended to it — archiving replaces the same history entry rather than
+leaving a shorter copy behind. It can do this at all because what links two
+steps is the earlier step's `outputUrl`, which is persisted, so a chain
+recovered from a closed tab or reopened from history continues where it stopped.
+(The video chain cannot: its link is an extracted frame that only exists in the
+tab that made it. Replicate's result URLs do expire, so continuing a chain from
+much later fails at the model rather than in the UI.)
+
 ## What the proxy allows, and why
 
 `api.replicate.com` sends no CORS headers, so the proxy is what makes any call
@@ -145,19 +163,25 @@ gone there.
 the modules touch (`localStorage`, `fetch`). Covered: the proxy's request policy,
 the prediction polling loop, per-model input assembly for images and video, the
 run model (what is persisted, a run's progress, the tab title), namespaced
-storage with its current-run / history persistence and the legacy migration, and
-the Batch Video run-item flattening including its download filename stems.
+storage with its current-run / history persistence and the legacy migration, the
+Batch Video run-item flattening including its download filename stems, and the
+Image Chain step model (the step a chain continues from, its numbering, the step
+count parsing and the download filename stems).
 
 `useGenerationRun` has no unit coverage — it is a hook over `localStorage`,
 `document.title` and `beforeunload`, and the node test environment has none of
 them. Its behaviour was verified in a real browser (Chromium + Playwright,
-driving the three tools against a stubbed `/v1`): progress and completion in the
+driving the tools against a stubbed `/v1`): progress and completion in the
 tab title, the run persisted with its prediction ids, no data URIs in what is
 stored, the `beforeunload` guard only while something is in flight, a run
 archived to history with its final statuses, an unfinished run recovered on load
 without creating a new prediction, and reopening a run from history. That script
 is not in the repo — it wants a proper Playwright suite, alongside the one
-`frames.js` needs. Changes to the hook need the same check by hand.
+`frames.js` needs. Changes to the hook need the same check by hand: `continueRun`
+was verified the same way (Chromium + Playwright against a stubbed `/v1`, driving
+the Image Chain Studio) — a chain generated, continued into the same history
+entry, recovered mid-step on reload and then continued from the recovered
+image, with each step's request carrying the previous step's output URL.
 
 `src/apps/video/frames.js` has **no** automated coverage — jsdom can't decode
 video, so a test there would assert nothing meaningful; it wants a Playwright
