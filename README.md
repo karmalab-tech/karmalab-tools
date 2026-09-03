@@ -134,7 +134,7 @@ choose the port (`fly.toml` uses 8080).
 ## Contributing
 
 Welcome — adding a model is one entry in a config file, and adding a whole tool
-is three edits. See [CONTRIBUTING.md](CONTRIBUTING.md).
+is four. See [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## License
 

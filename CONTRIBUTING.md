@@ -50,6 +50,8 @@ schemas differ in small ways that are easy to get wrong on paper.
    `src/entries/`.
 2. That input registered in `vite.config.js`.
 3. One entry in `server/routes.js`.
+4. One entry in `src/shared/tools.js`, so it shows up in the tools sidebar. A
+   test checks every tool listed there is a real route.
 
 Then build it in `src/apps/`, using the shared components from
 `src/shared/components`. Keep it independent — the tools share no state or shell,

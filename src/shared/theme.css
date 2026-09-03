@@ -30,6 +30,8 @@
 
   --animate-klb-spin: klb-spin 0.7s linear infinite;
   --animate-klb-pulse: klb-pulse 1s ease-in-out infinite;
+  --animate-klb-fade-in: klb-fade-in 0.15s ease-out;
+  --animate-klb-slide-in: klb-slide-in 0.2s cubic-bezier(0.2, 0, 0, 1);
 }
 
 @layer base {
@@ -53,5 +55,18 @@
   }
   50% {
     opacity: 0.3;
+  }
+}
+
+@keyframes klb-fade-in {
+  from {
+    opacity: 0;
+  }
+}
+
+/* The tools sidebar coming in from the edge. */
+@keyframes klb-slide-in {
+  from {
+    transform: translateX(-100%);
   }
 }

@@ -58,14 +58,21 @@ that also proxies the Replicate API.
    Persisting more per item means adding the key to `PERSISTED_ITEM_KEYS` in
    `src/shared/runs.js`; that whitelist is what keeps image data URIs out of
    `localStorage`, so never widen it to a data URI.
-7. **Adding a tool is three edits**: an HTML entry at the root, an input in
-   `vite.config.js`, an entry in `server/routes.js`, which is the source of truth
-   for which tools exist.
+7. **Adding a tool is four edits**: an HTML entry at the root, an input in
+   `vite.config.js`, an entry in `server/routes.js` — the source of truth for
+   which tools exist — and one in `src/shared/tools.js`, which is what the tools
+   sidebar puts in front of people. The two lists are deliberately not the same
+   (the Prompt Box mockup is routed but not offered); a test asserts every
+   navigable tool is a real route, so they can't drift into a dead link.
 
 ## Routing lives on the backend
 
 Each tool is a separate Vite HTML entry with its own JS bundle; there is no
-client-side router. The tools are genuinely independent — no shared shell, no
+client-side router — switching tools is a plain link, and the tools sidebar
+(`src/shared/components/ToolsSidebar.jsx`, opened from the `Tools` button in the
+`TopBar`) is a list of them. It replaced a tab per tool, which stopped fitting
+at four and wrapped on a phone; behind one button the bar keeps to three
+controls at any width. The tools are genuinely independent — no shared shell, no
 cross-tool state — so this keeps each bundle small (the heavy Batch Studio
 JavaScript never loads on the Prompt Box) and lets the server own routing.
 `vite build` emits `dist/`; `server/routes.js` maps clean routes to the built
@@ -82,7 +89,8 @@ HTML.
   (`frames.js` — end-frame extraction via off-screen `<video>` + canvas).
 - `src/shared/` — what the tools are built from: `theme.css` (the Tailwind
   entry — `@theme` tokens, base styles, keyframes), `components/` (import from
-  `src/shared/components`, which also pulls in `theme.css`), `replicate.js`
+  `src/shared/components`, which also pulls in `theme.css`), `tools.js` (the
+  tool list behind the sidebar), `replicate.js`
   (prediction create / poll / output helpers, the longer polling profile video
   needs, and `friendlyErrorMessage()`), `imageModels.js` and `videoModels.js`
   (the model catalogues and their input assembly, one per medium and each shared

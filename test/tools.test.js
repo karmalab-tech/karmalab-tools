@@ -9,6 +9,8 @@ import { CHAIN_MODEL_KEYS, MODEL_CONFIGS, buildImageInput } from '../src/shared/
 import { buildVideoInput } from '../src/shared/videoModels.js';
 import { loadKey, saveKey, storage } from '../src/apps/batch/storage.js';
 import { HISTORY_LIMIT, createToolStorage } from '../src/shared/storage.js';
+import { TOOLS, toolLabel } from '../src/shared/tools.js';
+import { routes } from '../server/routes.js';
 import { runCounts, runStatus, runTabTitle, serializeItem, uiStatus } from '../src/shared/runs.js';
 import { buildItems, splitPrompts } from '../src/apps/batchVideo/items.js';
 import {
@@ -850,5 +852,31 @@ describe('parseDurationMs', () => {
     expect(parseDurationMs('-100')).toBeNull();
     expect(parseDurationMs('')).toBeNull();
     expect(parseDurationMs('soon')).toBeNull();
+  });
+});
+
+// The tools sidebar lists what the UI offers; server/routes.js is the source of
+// truth for what exists. They are two lists, so this is what stops them
+// drifting into a dead link.
+describe('the tools in the navigation', () => {
+  it('all point at a real route', () => {
+    const paths = routes.map((r) => r.path);
+    TOOLS.forEach((tool) => expect(paths).toContain(tool.path));
+  });
+
+  it('leaves out the Prompt Box mockup', () => {
+    expect(TOOLS.map((t) => t.path)).not.toContain('/prompt');
+  });
+
+  it('gives every tool a name and a line about it', () => {
+    TOOLS.forEach((tool) => {
+      expect(tool.label).toBeTruthy();
+      expect(tool.blurb).toBeTruthy();
+    });
+  });
+
+  it('names the tool at a path, and nothing at an unknown one', () => {
+    expect(toolLabel('/image-chain')).toBe('Image Chain');
+    expect(toolLabel('/prompt')).toBe('');
   });
 });
