@@ -22,6 +22,7 @@ import {
 } from '../shared/fields.js';
 import { loadApiKey, loadOpenaiKey } from '../shared/apiKey.js';
 import { downloadUrl, downloadZip } from '../shared/download.js';
+import { useCachedImage } from '../shared/useCachedImage.js';
 import { useGenerationRun } from '../shared/useGenerationRun.js';
 import {
   MODEL_CONFIGS,
@@ -44,13 +45,16 @@ const pad = (n) => String(n).padStart(2, '0');
 
 const imageName = (item) => `${item.basename || `image-${item.id}`}.png`;
 
-function ResultCard({ result }) {
+function ResultCard({ result, cacheKey }) {
   const [downloading, setDownloading] = useState(false);
   const { prompt, status, outputUrl, error } = result;
+  // Falls back to the result URL until the cached copy is ready, and back to it
+  // for a run from before the cache existed.
+  const src = useCachedImage(cacheKey, outputUrl);
 
   async function download() {
     setDownloading(true);
-    await downloadUrl(outputUrl, imageName(result));
+    await downloadUrl(outputUrl, imageName(result), cacheKey);
     setDownloading(false);
   }
 
@@ -58,7 +62,7 @@ function ResultCard({ result }) {
     <div className="bg-panel-alt border border-panel-border rounded-2xl overflow-hidden flex flex-col">
       <div className="w-full aspect-square bg-black flex items-center justify-center relative overflow-hidden">
         {status === 'succeeded' && outputUrl ? (
-          <img src={outputUrl} alt="" className="w-full h-full object-cover block" />
+          <img src={src} alt="" className="w-full h-full object-cover block" />
         ) : status === 'failed' ? (
           <div className="text-error font-mono text-2xl">!</div>
         ) : (
@@ -239,13 +243,22 @@ export default function BatchImageStudio() {
     setRunHint({ text: 'Cancelling — finishing in-flight requests…', isError: false });
   }
 
+  // Replicate deletes a result an hour after it was made, so anything the cache
+  // missed can be gone by download time. Say which, rather than handing over a
+  // zip that is quietly short.
   async function downloadAll() {
     setDownloadLabel('Zipping…');
     try {
-      await downloadZip(
+      const { missing } = await downloadZip(
         'karmalab-images.zip',
-        succeeded.map((r) => ({ name: imageName(r), url: r.outputUrl }))
+        succeeded.map((r) => ({ name: imageName(r), url: r.outputUrl, key: gen.outputKey(r) }))
       );
+      if (missing.length) {
+        setRunHint({
+          text: `${missing.length} of ${succeeded.length} could not be included — Replicate deletes results an hour after they are made, and these were not cached.`,
+          isError: true,
+        });
+      }
     } catch (e) {
       alert('Could not build the zip file: ' + e.message);
     }
@@ -439,7 +452,7 @@ export default function BatchImageStudio() {
           ) : (
             <div className="grid grid-cols-[repeat(auto-fill,minmax(230px,1fr))] gap-3.5 mt-1">
               {gen.items.map((r) => (
-                <ResultCard key={r.id} result={r} />
+                <ResultCard key={r.id} result={r} cacheKey={gen.outputKey(r)} />
               ))}
             </div>
           )}

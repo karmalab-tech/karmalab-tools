@@ -18,6 +18,8 @@
 // input parsing) are unit-tested, the encoding is verified by hand in a
 // browser.
 
+import { cachedBlob } from '../../shared/outputCache.js';
+
 export const DEFAULT_MS_PER_IMAGE = 200;
 export const MIN_MS_PER_IMAGE = 20;
 export const MAX_MS_PER_IMAGE = 10000;
@@ -130,24 +132,34 @@ async function drain(encoder) {
   while (encoder.encodeQueueSize > 4) await new Promise((r) => setTimeout(r, 10));
 }
 
-// Build the video. `urls` are the images in chain order, `msPerImage` how long
-// each is held, `loop` whether to come back down the chain. `onProgress` is
-// called with { stage, done, total } as it goes. Resolves to
+// Build the video. `sources` are the images in chain order as
+// { url, key } — the key being their place in the output cache — `msPerImage`
+// how long each is held, `loop` whether to come back down the chain.
+// `onProgress` is called with { stage, done, total } as it goes. Resolves to
 // { blob, extension, label } — the extension being whichever container the
 // browser could encode.
-export async function buildChainVideo({ urls, msPerImage, loop, onProgress = () => {} }) {
+export async function buildChainVideo({ sources, msPerImage, loop, onProgress = () => {} }) {
   if (!videoSupport()) throw new Error('This browser cannot encode video.');
-  if (!urls.length) throw new Error('There are no images to stitch.');
+  if (!sources.length) throw new Error('There are no images to stitch.');
 
-  // Fetch every image up front: replicate.delivery sends CORS headers, and
-  // decoding from a blob (rather than pointing the canvas at the URL) keeps the
-  // canvas untainted so the frames can be read back.
+  // Gather every image up front, cache first: an hour after a step ran its
+  // Replicate URL is a link to a deleted file, and the cached copy is the only
+  // one left. Decoding from a blob (rather than pointing the canvas at a URL)
+  // also keeps the canvas untainted, so the frames can be read back.
   const bitmaps = [];
-  for (const [i, url] of urls.entries()) {
-    onProgress({ stage: 'loading', done: i, total: urls.length });
-    const resp = await fetch(url);
-    if (!resp.ok) throw new Error(`Could not download image ${i + 1} (HTTP ${resp.status}).`);
-    bitmaps.push(await createImageBitmap(await resp.blob()));
+  for (const [i, source] of sources.entries()) {
+    onProgress({ stage: 'loading', done: i, total: sources.length });
+    let blob = source.key ? await cachedBlob(source.key) : null;
+    if (!blob) {
+      const resp = await fetch(source.url);
+      if (!resp.ok) {
+        throw new Error(
+          `Image ${i + 1} is no longer available (HTTP ${resp.status}) — Replicate deletes results an hour after they are made, and this one was not cached.`
+        );
+      }
+      blob = await resp.blob();
+    }
+    bitmaps.push(await createImageBitmap(blob));
   }
 
   // H.264 wants even dimensions; the first image sets the frame, the rest are

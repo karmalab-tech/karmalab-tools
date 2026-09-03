@@ -37,7 +37,9 @@ that also proxies the Replicate API.
    quietly.
 3. **Never store an API key server-side, or log one.** Keys live in the
    browser's `localStorage` and are passed through per request. This is the whole
-   trust model.
+   trust model. Generated outputs are cached in the _browser's_ IndexedDB
+   (`src/shared/outputCache.js`) because Replicate deletes them after an hour —
+   that is local storage on the user's machine, never the server.
 4. **Tailwind utilities only.** Tokens are in `@theme` in
    `src/shared/theme.css`; there are no co-located `.css` files. Pull long
    repeated class strings into a local const or a variant map.
@@ -154,6 +156,41 @@ sitting in the history list.
 tab that made it. Replicate's result URLs do expire, so continuing a chain from
 much later fails at the model rather than in the UI.)
 
+## Results outlive Replicate, on purpose
+
+Replicate deletes an API prediction's output files an hour after the prediction
+ran — the file, not just the signature on the URL, so re-fetching the prediction
+returns a link to nothing. A long batch or chain can finish with its earliest
+results already gone, and a run reopened from History is older than that by
+definition.
+
+So `src/shared/outputCache.js` copies every output into **IndexedDB the moment
+it lands**, while the URL is still good, and everything downstream reads the
+cache before the network: the result cards (`useCachedImage`), the single
+downloads and zips (`download.js`), and the image chain's video encoder. The
+copy is per browser, on the user's own machine — no server sees it, so the trust
+model is unchanged, but note it _is_ a change to "nothing is stored": the
+outputs are now on disk locally, and the History modal says so.
+
+- **The write happens in `useGenerationRun.updateItem`**, not in each tool: any
+  patch carrying an `outputUrl` triggers the copy, so all four tools got this at
+  one call site. It is deliberately not awaited — a run is never held up by
+  caching, and a failed copy just means falling back to the URL later.
+- **Keys are `tool/runId/itemId`** (`cacheKey`), which is what lets a run's files
+  be dropped in one go when its history entry is cleared, and keeps two tools
+  from colliding on an item id.
+- **The store is bounded** (`MAX_BYTES`, 500 MB) and evicts oldest-first
+  (`planEviction`), so a browser profile can't fill up with a year of
+  generations. A run pushed off the end of the capped history list keeps its
+  files until that eviction reaches them.
+- **Every path degrades to the network.** No IndexedDB (private mode, blocked
+  storage), a quota error, a failed copy — all of it resolves to "no cached
+  blob", and the download falls back to the URL. What it must never do is throw
+  into a run.
+- **A zip that comes up short says so.** `downloadZip` returns the names it
+  could not find anywhere; the tools surface that instead of handing over a zip
+  that is quietly three images light.
+
 ## Stitching a chain into a video
 
 `src/apps/imageChain/video.js` turns a finished image chain into one video, in
@@ -213,7 +250,7 @@ the modules touch (`localStorage`, `fetch`). Covered: the proxy's request policy
 the prediction polling loop, per-model input assembly for images and video, the
 run model (what is persisted, a run's progress, the tab title), namespaced
 storage with its current-run / history persistence, removing a run from history
-and the legacy migration, the
+and the legacy migration, the output cache's keys and its eviction plan, the
 Batch Video run-item flattening including its download filename stems, and the
 Image Chain step model (the step a chain continues from or a retry goes back to,
 its numbering, the step count parsing and the download filename stems) and its

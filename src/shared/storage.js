@@ -148,6 +148,9 @@ export function createToolStorage(namespace) {
   }
 
   return {
+    // The tool this storage belongs to. The output cache keys by it too, so a
+    // run's cached files can be found without a second name for the same tool.
+    namespace,
     loadKey,
     saveKey,
     loadCurrentRun,

@@ -10,6 +10,14 @@ import { buildVideoInput } from '../src/shared/videoModels.js';
 import { loadKey, saveKey, storage } from '../src/apps/batch/storage.js';
 import { HISTORY_LIMIT, createToolStorage } from '../src/shared/storage.js';
 import { TOOLS, toolLabel } from '../src/shared/tools.js';
+import {
+  MAX_BYTES,
+  cacheKey,
+  cacheSupported,
+  formatBytes,
+  keyRun,
+  planEviction,
+} from '../src/shared/outputCache.js';
 import { routes } from '../server/routes.js';
 import { runCounts, runStatus, runTabTitle, serializeItem, uiStatus } from '../src/shared/runs.js';
 import { buildItems, splitPrompts } from '../src/apps/batchVideo/items.js';
@@ -878,5 +886,64 @@ describe('the tools in the navigation', () => {
   it('names the tool at a path, and nothing at an unknown one', () => {
     expect(toolLabel('/image-chain')).toBe('Image Chain');
     expect(toolLabel('/prompt')).toBe('');
+  });
+});
+
+// Keeping results after Replicate deletes them (an hour after they are made).
+// The IndexedDB side needs a browser and is verified there; what is arithmetic
+// — the keys, and what gets evicted when the store is full — is covered here.
+describe('the output cache keys', () => {
+  it('namespace a run and its items', () => {
+    expect(cacheKey('imageChainStudio', 'run-1', 'step-2')).toBe('imageChainStudio/run-1/step-2');
+  });
+
+  it('can be traced back to their run', () => {
+    expect(keyRun('imageChainStudio/run-1/step-2')).toBe('imageChainStudio/run-1');
+  });
+
+  it('keep two tools apart at the same item id', () => {
+    expect(cacheKey('batchImageStudio', 'run-1', 'r1')).not.toBe(
+      cacheKey('batchVideoStudio', 'run-1', 'r1')
+    );
+  });
+
+  it('reports whether this environment can cache at all', () => {
+    // Node has no IndexedDB, so every caller must cope with it being absent.
+    expect(cacheSupported()).toBe(false);
+  });
+});
+
+describe('planEviction', () => {
+  const entry = (key, bytes, savedAt) => ({ key, bytes, savedAt });
+
+  it('keeps everything while there is room', () => {
+    expect(planEviction([entry('a', 10, 1), entry('b', 10, 2)], 100)).toEqual([]);
+  });
+
+  it('drops the oldest first, and only as many as it takes', () => {
+    const entries = [entry('old', 40, 1), entry('mid', 40, 2), entry('new', 40, 3)];
+    expect(planEviction(entries, 100)).toEqual(['old']);
+  });
+
+  it('keeps dropping until it is under the cap', () => {
+    const entries = [entry('old', 40, 1), entry('mid', 40, 2), entry('new', 40, 3)];
+    expect(planEviction(entries, 50)).toEqual(['old', 'mid']);
+  });
+
+  it('handles an entry that never recorded its size', () => {
+    expect(planEviction([entry('a', undefined, 1), entry('b', 10, 2)], 5)).toEqual(['a', 'b']);
+  });
+
+  it('has a default cap in the hundreds of megabytes', () => {
+    expect(MAX_BYTES).toBeGreaterThan(100 * 1024 * 1024);
+  });
+});
+
+describe('formatBytes', () => {
+  it('reads as megabytes, with kilobytes for the small stuff', () => {
+    expect(formatBytes(0)).toBe('0 MB');
+    expect(formatBytes(2 * 1024 * 1024)).toBe('2.0 MB');
+    expect(formatBytes(400 * 1024)).toBe('400 KB');
+    expect(formatBytes(250 * 1024 * 1024)).toBe('250 MB');
   });
 });

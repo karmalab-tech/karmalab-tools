@@ -6,6 +6,7 @@ import {
   getPrediction,
   pollPrediction,
 } from './replicate.js';
+import { cacheKey, cacheOutput, forgetRuns } from './outputCache.js';
 import { isActiveItem, newRunId, runCounts, runTabTitle, serializeRun, uiStatus } from './runs.js';
 import { useUnloadGuard } from './useUnloadGuard.js';
 
@@ -20,6 +21,7 @@ import { useUnloadGuard } from './useUnloadGuard.js';
 //   gen.finishRun();                  // the runner is done
 //   gen.continueRun();                // reopen the finished run to add to it
 //   gen.removeItem(id);               // drop one item from the run
+//   gen.outputKey(item);              // its key in the output cache
 //
 // Options:
 //   storage       — a createToolStorage(namespace) instance (one per tool)
@@ -68,9 +70,27 @@ export function useGenerationRun({
     };
   }, []);
 
-  const updateItem = useCallback((id, patch) => {
-    setItems((prev) => prev.map((it) => (it.id === id ? { ...it, ...patch } : it)));
-  }, []);
+  // Every result that lands is also fetched into the output cache, there and
+  // then, while its URL is still good: Replicate deletes the file an hour
+  // later, so this is the only window there is. It is deliberately not awaited
+  // — the run carries on, and a download later falls back to the URL if the
+  // copy didn't happen.
+  const updateItem = useCallback(
+    (id, patch) => {
+      setItems((prev) => prev.map((it) => (it.id === id ? { ...it, ...patch } : it)));
+      const run = runRef.current;
+      if (patch.outputUrl && run)
+        cacheOutput(cacheKey(storage.namespace, run.id, id), patch.outputUrl);
+    },
+    [storage]
+  );
+
+  // Where an item's cached copy lives, for the download helpers to look it up.
+  const outputKey = useCallback(
+    (item) =>
+      runRef.current && item ? cacheKey(storage.namespace, runRef.current.id, item.id) : '',
+    [storage]
+  );
 
   const appendItems = useCallback((newItems) => {
     setItems((prev) => [...prev, ...newItems]);
@@ -317,8 +337,14 @@ export function useGenerationRun({
     [archive, refreshRun, storage]
   );
 
+  // Clearing history drops the cached files of those runs with it — a run that
+  // is gone from the list has no way back to its results, so keeping megabytes
+  // of them would just be litter. (A run pushed off the end of the capped list
+  // keeps its files until the cache evicts them by age.)
   const clearHistory = useCallback(() => {
+    const gone = storage.loadHistory().map((r) => `${storage.namespace}/${r.id}`);
     storage.clearHistory();
+    forgetRuns(gone);
     setHistory([]);
     setHistoryOpen(false);
   }, [storage]);
@@ -337,6 +363,7 @@ export function useGenerationRun({
     updateItem,
     appendItems,
     removeItem,
+    outputKey,
     run,
     counts,
     hasActive,

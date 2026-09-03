@@ -22,6 +22,7 @@ import {
 } from '../shared/fields.js';
 import { loadApiKey, loadOpenaiKey } from '../shared/apiKey.js';
 import { downloadUrl, downloadZip, triggerDownload } from '../shared/download.js';
+import { useCachedImage } from '../shared/useCachedImage.js';
 import { useGenerationRun } from '../shared/useGenerationRun.js';
 import {
   CHAIN_MODEL_KEYS,
@@ -53,6 +54,14 @@ import { loadKey, saveKey, storage } from './imageChain/storage.js';
 
 const needsOpenaiKey = (cfg) => (cfg.extraFields || []).some((f) => f.type === 'apiKey');
 
+// What to say when a zip comes up short. Replicate deletes results an hour
+// after they are made, so this is what an old chain looks like when its images
+// were never cached (a browser with no IndexedDB, or a cache since evicted).
+const expiredMessage = (missing) =>
+  `${missing.length} ${missing.length === 1 ? 'image' : 'images'} could not be included — ` +
+  'Replicate deletes results an hour after they are made, and these were not cached. ' +
+  `Missing: ${missing.join(', ')}`;
+
 // What the tool opens on: an image-to-image editing model, which is what a
 // chain wants — every step is handed the previous image and asked to take it
 // one step further. Falls back to the first chainable model if it ever leaves
@@ -82,13 +91,16 @@ const savedAspect = (modelKey) => {
 // A mini-button that is unavailable while the chain is generating.
 const MINI_BTN_ACTION = `${MINI_BTN} disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:border-panel-border disabled:hover:text-text-dim`;
 
-function StepCard({ step, busy, onRetry, onDelete }) {
+function StepCard({ step, busy, cacheKey, onRetry, onDelete }) {
   const [downloading, setDownloading] = useState(false);
   const { index, label, status, outputUrl, error, from } = step;
+  // The cached copy where there is one: a chain older than an hour has nothing
+  // left at its Replicate URL, and the cards would all be broken images.
+  const src = useCachedImage(cacheKey, outputUrl);
 
   async function download() {
     setDownloading(true);
-    await downloadUrl(outputUrl, imageName(step));
+    await downloadUrl(outputUrl, imageName(step), cacheKey);
     setDownloading(false);
   }
 
@@ -98,7 +110,7 @@ function StepCard({ step, busy, onRetry, onDelete }) {
         {status === 'succeeded' && outputUrl ? (
           // Contained rather than cropped: the point of a chain is watching the
           // image drift from step to step, framing included.
-          <img src={outputUrl} alt="" className="w-full h-full object-contain block" />
+          <img src={src} alt="" className="w-full h-full object-contain block" />
         ) : status === 'failed' ? (
           <div className="text-error font-mono text-2xl">!</div>
         ) : (
@@ -412,18 +424,19 @@ export default function ImageChainStudio() {
     setRunHint({ text: 'Cancelling — finishing the current request…', isError: false });
   }
 
-  function downloadImages() {
-    return downloadZip(
+  async function downloadImages() {
+    const { missing } = await downloadZip(
       'karmalab-image-chain.zip',
-      succeeded.map((s) => ({ name: imageName(s), url: s.outputUrl }))
+      succeeded.map((s) => ({ name: imageName(s), url: s.outputUrl, key: gen.outputKey(s) }))
     );
+    if (missing.length) throw new Error(expiredMessage(missing));
   }
 
   // Stitch the chain into one video: every image held for the same moment, in
   // chain order. Built here in the browser (src/apps/imageChain/video.js).
   async function downloadVideo({ msPerImage, loop, onProgress }) {
     const { blob, extension } = await buildChainVideo({
-      urls: succeeded.map((s) => s.outputUrl),
+      sources: succeeded.map((s) => ({ url: s.outputUrl, key: gen.outputKey(s) })),
       msPerImage,
       loop,
       onProgress,
@@ -645,6 +658,7 @@ export default function ImageChainStudio() {
                   key={s.id}
                   step={s}
                   busy={busy}
+                  cacheKey={gen.outputKey(s)}
                   onRetry={retryStep}
                   onDelete={deleteStep}
                 />

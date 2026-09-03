@@ -19,7 +19,10 @@ models (the OpenAI GPT Image ones) additionally bill through your own OpenAI
 account and need an OpenAI key too.
 
 Nothing is stored server-side — no accounts, no tokens, no prompts, no outputs.
-Your generations and their history live in that browser's `localStorage` too.
+Your generations and their history live in that browser's `localStorage`, and
+the results themselves are cached in that browser's IndexedDB (see below). All
+of it is on your machine; clearing the history deletes the cached results with
+it.
 
 ## Closing the tab doesn't lose a generation
 
@@ -35,8 +38,16 @@ persist the generation in progress as it goes:
 - The browser tab shows the progress (`⏳ 2/6`) and how it ended (`✅` / `⚠️`), so
   a long batch can be left in a background tab.
 
-Only what is needed to rebuild a card is stored — prompts, prediction ids and
-result URLs. Uploaded start frames and the video chain's extracted frames stay in
+**Results are kept in the browser, because Replicate doesn't keep them.**
+Replicate deletes an API prediction's output files an hour after it ran, so a
+long batch can finish with its first results already gone, and yesterday's run
+would have nothing left to download. Every result is therefore copied into
+IndexedDB as it arrives, and the cards, the downloads, the zips and the video
+all read that copy first. The store is capped at 500 MB and drops the oldest
+first; clearing the history clears the copies of those runs.
+
+Only what is needed to rebuild a card is stored in `localStorage` — prompts,
+prediction ids and result URLs; the result files themselves go to IndexedDB. Uploaded start frames and the video chain's extracted frames stay in
 memory: they are far too big for the `localStorage` quota, so a recovered card
 has no thumbnail, and a recovered video chain can be watched but not continued.
 An image chain is the exception: each step's reference is the previous step's
