@@ -58,7 +58,9 @@ it stopped (until those links expire).
   the whole chain downloads as a zip. When it finishes, running it again adds
   more steps to the same chain, continuing from its last image — including after
   a reload, since what links two steps is a result URL rather than an in-memory
-  frame. Models: the image models that take a reference image.
+  frame. A step that fails has a **Retry** button on its card: it is generated
+  again in place, from the same image it was given, so one bad step doesn't cost
+  you the chain. Models: the image models that take a reference image.
 - **Batch Video Studio** (`/batch-videos`) — the same idea for video, in two
   modes: one video per prompt line (with an optional shared start frame), or one
   video per uploaded start frame from a single prompt.

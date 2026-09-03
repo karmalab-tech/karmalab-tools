@@ -42,7 +42,7 @@ import {
   imageName,
   nextStepIndex,
   parseStepCount,
-  sourceLabels,
+  sourceLabel,
   stepBasename,
   stepId,
   stepLabel,
@@ -77,9 +77,12 @@ const savedAspect = (modelKey) => {
   return options.some((o) => o.value === saved) ? saved : options[0].value;
 };
 
-function StepCard({ step, from }) {
+// A mini-button that is unavailable while the chain is generating.
+const MINI_BTN_ACTION = `${MINI_BTN} disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:border-panel-border disabled:hover:text-text-dim`;
+
+function StepCard({ step, busy, onRetry }) {
   const [downloading, setDownloading] = useState(false);
-  const { index, label, status, outputUrl, error } = step;
+  const { index, label, status, outputUrl, error, from } = step;
 
   async function download() {
     setDownloading(true);
@@ -116,6 +119,23 @@ function StepCard({ step, from }) {
             </a>
             <button type="button" className={MINI_BTN} onClick={download}>
               {downloading ? '…' : 'Download'}
+            </button>
+          </div>
+        )}
+        {status === 'failed' && (
+          <div className="flex gap-1.5 mt-0.5">
+            <button
+              type="button"
+              className={MINI_BTN_ACTION}
+              onClick={() => onRetry(step)}
+              disabled={busy}
+              title={
+                busy
+                  ? 'Wait for the current step to finish'
+                  : 'Generate this step again from the same image'
+              }
+            >
+              Retry this step
             </button>
           </div>
         )}
@@ -160,7 +180,6 @@ export default function ImageChainStudio() {
   // is the reference the next step starts from. It survives a reload and a trip
   // through history, because it is only a URL.
   const source = chainSource(steps);
-  const cameFrom = sourceLabels(steps);
   const stepCount = parseStepCount(stepsText);
 
   // A chain recovered on reload — or opened from history — comes back with the
@@ -194,24 +213,28 @@ export default function ImageChainStudio() {
     saveKey(`extra.${key}`, value.trim());
   }
 
-  // Generate one step: create + poll the prediction. Returns { ok, outputUrl } —
-  // the URL is what the next step uses as its reference image.
-  async function runStep(index, reference, key) {
-    const id = stepId(index);
-    const promptText = prompt.trim();
-    gen.appendItems([
-      {
-        id,
-        index,
-        predictionId: null,
-        status: 'queued',
-        prompt: promptText,
-        label: stepLabel(index),
-        basename: stepBasename(index),
-        outputUrl: null,
-        error: null,
-      },
-    ]);
+  // One step's card, before it has been generated. `from` is the step whose
+  // image it starts from, for the line on the card.
+  function newStep(index, from) {
+    return {
+      id: stepId(index),
+      index,
+      predictionId: null,
+      status: 'queued',
+      prompt: prompt.trim(),
+      label: stepLabel(index),
+      basename: stepBasename(index),
+      from,
+      outputUrl: null,
+      error: null,
+    };
+  }
+
+  // Generate one step that is already on screen: create + poll the prediction.
+  // Returns { ok, outputUrl } — the URL is what the next step uses as its
+  // reference image.
+  async function runStep(step, reference, key) {
+    const { id, prompt: promptText } = step;
     try {
       const input = buildImageInput(cfg, {
         promptText,
@@ -245,22 +268,26 @@ export default function ImageChainStudio() {
     setRunHint(hint);
   }
 
-  async function runChain(total, startIndex, initialReference, key) {
+  async function runChain(total, startIndex, initialReference, initialFrom, key) {
     let reference = initialReference;
+    let from = initialFrom;
     for (let i = 0; i < total; i++) {
-      const res = await runStep(startIndex + i, reference, key);
+      const step = newStep(startIndex + i, from);
+      gen.appendItems([step]);
+      const res = await runStep(step, reference, key);
       if (cancelRef.current) {
         endChain({ text: `Cancelled — ${i} of ${total} steps finished.`, isError: false });
         return;
       }
       if (!res.ok) {
         endChain({
-          text: `Stopped — ${stepLabel(startIndex + i).toLowerCase()} failed. Fix it and run again to continue from the last image.`,
+          text: `Stopped — ${step.label.toLowerCase()} failed. Retry it on its card below, or run again to carry on from the last image.`,
           isError: true,
         });
         return;
       }
       reference = res.outputUrl;
+      from = step.label;
     }
     endChain({
       text: `${total} ${total === 1 ? 'step' : 'steps'} generated — run again to continue the chain, or download them below.`,
@@ -268,10 +295,10 @@ export default function ImageChainStudio() {
     });
   }
 
-  // Everything both entry points need before they can run: the keys, a prompt
-  // and a sane step count. Returns the Replicate token, or null after leaving a
-  // hint about what is missing.
-  function checkedKey() {
+  // Everything a run needs before it can start: the keys, a prompt and — for
+  // anything but a single-step retry — a sane step count. Returns the Replicate
+  // token, or null after leaving a hint about what is missing.
+  function checkedKey({ needsStepCount = true } = {}) {
     const key = apiKey.trim();
     if (!key) {
       setRunHint({ text: 'Add your Replicate API token first.', isError: true });
@@ -287,7 +314,7 @@ export default function ImageChainStudio() {
       setRunHint({ text: 'Write a prompt first.', isError: true });
       return null;
     }
-    if (!stepCount) {
+    if (needsStepCount && !stepCount) {
       setRunHint({ text: `Set how many steps to generate (1 to ${MAX_STEPS}).`, isError: true });
       return null;
     }
@@ -305,7 +332,7 @@ export default function ImageChainStudio() {
     setRunHint({ text: '', isError: false });
     cancelRef.current = false;
     setIsRunning(true);
-    runChain(stepCount, 0, firstReference?.dataUri || null, key);
+    runChain(stepCount, 0, firstReference?.dataUri || null, '', key);
   }
 
   // Run again on a finished chain: more steps, continuing from its last image,
@@ -321,7 +348,44 @@ export default function ImageChainStudio() {
     cancelRef.current = false;
     setIsRunning(true);
     gen.continueRun();
-    runChain(stepCount, nextStepIndex(steps), source.outputUrl, key);
+    runChain(stepCount, nextStepIndex(steps), source.outputUrl, sourceLabel(source), key);
+  }
+
+  // Retry a step that failed, in place: same number, and the same image it was
+  // handed the first time (the newest one before it), so the rest of the chain
+  // still lines up. This is the way out of a chain that stopped on an error —
+  // including one that failed on its very first step, where there is no image
+  // to continue from yet.
+  async function retryStep(step) {
+    if (busy) return;
+    const key = checkedKey({ needsStepCount: false });
+    if (!key) return;
+
+    const index = step.index ?? 0;
+    const before = chainSource(steps, index);
+    const reference = before ? before.outputUrl : firstReference?.dataUri || null;
+    const fresh = newStep(index, sourceLabel(before));
+
+    setDownloadLabel('Download all (.zip)');
+    setRunHint({ text: '', isError: false });
+    cancelRef.current = false;
+    setIsRunning(true);
+    // The chain may already have been archived; take it back so the retry is
+    // part of it rather than of nothing.
+    gen.continueRun();
+    gen.setItems((prev) => prev.map((it) => (it.id === step.id ? fresh : it)));
+    const res = await runStep(fresh, reference, key);
+    endChain(
+      res.ok
+        ? {
+            text: `${fresh.label} generated — run again to carry the chain on from it.`,
+            isError: false,
+          }
+        : {
+            text: `${fresh.label} failed again — its card says why.`,
+            isError: true,
+          }
+    );
   }
 
   function cancel() {
@@ -549,8 +613,8 @@ export default function ImageChainStudio() {
             </div>
           ) : (
             <div className="grid grid-cols-[repeat(auto-fill,minmax(230px,1fr))] gap-3.5 mt-1">
-              {steps.map((s, i) => (
-                <StepCard key={s.id} step={s} from={cameFrom[i]} />
+              {steps.map((s) => (
+                <StepCard key={s.id} step={s} busy={busy} onRetry={retryStep} />
               ))}
             </div>
           )}

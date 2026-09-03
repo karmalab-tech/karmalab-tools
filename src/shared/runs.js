@@ -12,7 +12,7 @@
 // the persistence, the recovery, the history modal and the tab title one
 // implementation instead of one per tool:
 //
-//   { id, predictionId, status, prompt, label, basename, outputUrl, error, index }
+//   { id, predictionId, status, prompt, label, basename, outputUrl, error, index, from }
 //
 //   id           — stable UI key (the prediction id for a restored item)
 //   predictionId — the Replicate prediction, null until it has been created
@@ -23,6 +23,8 @@
 //   outputUrl    — the model's output URL once it succeeded
 //   error        — failure message, if any
 //   index        — optional position in the run (a chain's clip or step number)
+//   from         — optional label of the item this one was generated from (the
+//                  image chain's previous step)
 //
 // Anything else a tool hangs off an item (start frames, object URLs, extracted
 // end frames) stays in memory only: PERSISTED_ITEM_KEYS is a whitelist, so
@@ -38,6 +40,7 @@ export const PERSISTED_ITEM_KEYS = [
   'outputUrl',
   'error',
   'index',
+  'from',
 ];
 
 export const isTerminalStatus = (status) => status === 'succeeded' || status === 'failed';

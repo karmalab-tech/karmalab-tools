@@ -13,7 +13,8 @@ that also proxies the Replicate API.
   flagship tool.
 - **Image Chain Studio** (`/image-chain`) — chains images: each step is
   generated from the previous step's image as its reference. Run it again and it
-  adds more steps to the same chain, continuing from its last image.
+  adds more steps to the same chain, continuing from its last image; a step that
+  failed is retried in place from its own card.
 - **Batch Video Studio** (`/batch-videos`) — a batch of videos: one per prompt
   line, or one per uploaded start frame. Both modes flatten to one list of run
   items in `src/apps/batchVideo/items.js`.
@@ -128,6 +129,12 @@ steps are appended to it — archiving replaces the same history entry rather th
 leaving a shorter copy behind. It can do this at all because what links two
 steps is the earlier step's `outputUrl`, which is persisted, so a chain
 recovered from a closed tab or reopened from history continues where it stopped.
+The same URL is what a retry reuses: a failed step is replaced in place with a
+fresh one at the same number, handed the newest image _before_ it
+(`chainSource(items, index)`), so a failure anywhere in the chain — the first
+step included — is recoverable without starting over. Each step records the
+label of the step it came from (`from`, persisted) rather than deriving it, so
+retrying one step never rewrites what another card says it used.
 (The video chain cannot: its link is an extracted frame that only exists in the
 tab that made it. Replicate's result URLs do expire, so continuing a chain from
 much later fails at the model rather than in the UI.)
@@ -165,8 +172,8 @@ the prediction polling loop, per-model input assembly for images and video, the
 run model (what is persisted, a run's progress, the tab title), namespaced
 storage with its current-run / history persistence and the legacy migration, the
 Batch Video run-item flattening including its download filename stems, and the
-Image Chain step model (the step a chain continues from, its numbering, the step
-count parsing and the download filename stems).
+Image Chain step model (the step a chain continues from or a retry goes back to,
+its numbering, the step count parsing and the download filename stems).
 
 `useGenerationRun` has no unit coverage — it is a hook over `localStorage`,
 `document.title` and `beforeunload`, and the node test environment has none of
@@ -181,7 +188,11 @@ is not in the repo — it wants a proper Playwright suite, alongside the one
 was verified the same way (Chromium + Playwright against a stubbed `/v1`, driving
 the Image Chain Studio) — a chain generated, continued into the same history
 entry, recovered mid-step on reload and then continued from the recovered
-image, with each step's request carrying the previous step's output URL.
+image, with each step's request carrying the previous step's output URL. The
+per-step retry was checked the same way, against a stub that fails on demand: a
+failed first step retried in place, a mid-chain failure retried with the image
+before it rather than a later one, and no extra cards or history entries left
+behind.
 
 `src/apps/video/frames.js` has **no** automated coverage — jsdom can't decode
 video, so a test there would assert nothing meaningful; it wants a Playwright

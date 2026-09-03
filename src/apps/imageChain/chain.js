@@ -32,28 +32,24 @@ export function parseStepCount(raw) {
   return Math.min(n, MAX_STEPS);
 }
 
-// Where a continued chain picks up: the newest step that produced an image.
-// A failed tail is skipped, so a chain that stopped on an error carries on from
-// the last good image instead of not at all.
-export function chainSource(items) {
+// The step whose image another one starts from: the newest step that produced
+// an image, before `beforeIndex` (the end of the chain by default). A failed
+// step is skipped, so a chain that stopped on an error carries on from the last
+// good image instead of not at all — and retrying a failed step hands it the
+// same image it was given the first time.
+export function chainSource(items, beforeIndex = Infinity) {
   for (let i = items.length - 1; i >= 0; i--) {
     const item = items[i];
+    if ((item.index ?? i) >= beforeIndex) continue;
     if (item.status === 'succeeded' && item.outputUrl) return item;
   }
   return null;
 }
 
-// The label of the step each step continued from, in the same order — what a
-// card shows under its heading. Null for a step with no image before it.
-export function sourceLabels(items) {
-  let previous = null;
-  return items.map((item) => {
-    const label = previous;
-    if (item.status === 'succeeded' && item.outputUrl)
-      previous = item.label || stepLabel(item.index ?? 0);
-    return label;
-  });
-}
+// How a step names the step it continued from. Recorded on the step when it is
+// created (`from`) rather than derived later, so a retry elsewhere in the chain
+// can't rewrite what an earlier card says it used. Empty starts a chain.
+export const sourceLabel = (item) => (item ? item.label || stepLabel(item.index ?? 0) : '');
 
 // The number the next step gets. A failed step still took its place in the
 // chain, so every item counts — including one recovered from storage, which

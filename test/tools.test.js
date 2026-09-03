@@ -17,7 +17,7 @@ import {
   imageName,
   nextStepIndex,
   parseStepCount,
-  sourceLabels,
+  sourceLabel,
   stepId,
 } from '../src/apps/imageChain/chain.js';
 
@@ -734,14 +734,24 @@ describe('chainSource', () => {
     expect(chainSource([step(0, 'running')])).toBeNull();
   });
 
-  it('labels each step with the one it continued from', () => {
+  it('hands a retried step the image it was given before, not a later one', () => {
     const items = [
       step(0, 'succeeded', 'a.png'),
-      step(1, 'failed'),
-      step(2, 'succeeded', 'c.png'),
-      step(3, 'running'),
+      step(1, 'succeeded', 'b.png'),
+      step(2, 'failed'),
+      step(3, 'succeeded', 'd.png'),
     ];
-    expect(sourceLabels(items)).toEqual([null, 'Step 1', 'Step 1', 'Step 3']);
+    // Retrying step 3 (index 2) continues from step 2, even though step 4 has
+    // since produced an image of its own.
+    expect(chainSource(items, 2).outputUrl).toBe('b.png');
+    // The first step has nothing before it — it starts the chain.
+    expect(chainSource(items, 0)).toBeNull();
+  });
+
+  it('names the step an image came from, and nothing for the chain start', () => {
+    expect(sourceLabel(step(1, 'succeeded', 'b.png'))).toBe('Step 2');
+    expect(sourceLabel({ index: 4, status: 'succeeded', outputUrl: 'e.png' })).toBe('Step 5');
+    expect(sourceLabel(null)).toBe('');
   });
 });
 
