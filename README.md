@@ -54,13 +54,17 @@ it stopped (until those links expire).
 - **Image Chain Studio** (`/image-chain`) — chains images instead of batching
   them: the first step is generated from your prompt (and an optional reference
   image), and every step after it is generated from the image the step before it
-  produced. Pick how many steps to run; each one shows up as its own card, and
-  the whole chain downloads as a zip. When it finishes, running it again adds
-  more steps to the same chain, continuing from its last image — including after
-  a reload, since what links two steps is a result URL rather than an in-memory
-  frame. A step that fails has a **Retry** button on its card: it is generated
-  again in place, from the same image it was given, so one bad step doesn't cost
-  you the chain. Models: the image models that take a reference image.
+  produced. Pick how many steps to run; each one shows up as its own card.
+  Running it again adds more steps to the same chain, always carrying on from the
+  last step that produced an image — including after a reload, since what links
+  two steps is a result URL rather than an in-memory frame. A step that fails
+  gets **Retry** (generate it again in place, from the same image it was given)
+  and **Delete** (take it out of the chain), so one bad step doesn't cost you the
+  run. The finished chain downloads either as one **video**, every image held for
+  a duration you choose (200ms by default) and optionally looping back down the
+  chain so it repeats without a jump, or as the **images** in a zip. The video is
+  encoded in your browser with WebCodecs — nothing is uploaded.
+  Models: the image models that take a reference image.
 - **Batch Video Studio** (`/batch-videos`) — the same idea for video, in two
   modes: one video per prompt line (with an optional shared start frame), or one
   video per uploaded start frame from a single prompt.
