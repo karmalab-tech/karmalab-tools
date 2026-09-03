@@ -11,6 +11,12 @@ that also proxies the Replicate API.
 
 - **Batch Image Studio** (`/`) — one image per text prompt, in batch. The
   flagship tool.
+- **Image Chain Studio** (`/image-chain`) — chains images: each step is
+  generated from the previous step's image as its reference. Run it again and it
+  adds more steps to the same chain, always continuing from the last step that
+  produced an image; a step that failed is retried in place, or deleted, from
+  its own card. The finished chain downloads as the images in a zip, or as one
+  video with each image held for a set number of milliseconds.
 - **Batch Video Studio** (`/batch-videos`) — a batch of videos: one per prompt
   line, or one per uploaded start frame. Both modes flatten to one list of run
   items in `src/apps/batchVideo/items.js`.
@@ -31,31 +37,44 @@ that also proxies the Replicate API.
    quietly.
 3. **Never store an API key server-side, or log one.** Keys live in the
    browser's `localStorage` and are passed through per request. This is the whole
-   trust model.
+   trust model. Generated outputs are cached in the _browser's_ IndexedDB
+   (`src/shared/outputCache.js`) because Replicate deletes them after an hour —
+   that is local storage on the user's machine, never the server.
 4. **Tailwind utilities only.** Tokens are in `@theme` in
    `src/shared/theme.css`; there are no co-located `.css` files. Pull long
    repeated class strings into a local const or a variant map.
-5. **Adding a model is one entry** in `src/apps/batch/models.js` (images) or
-   `src/shared/videoModels.js` (video — shared by both video tools, so an entry
-   there appears in each). The UI rebuilds itself from it; don't special-case a
-   model in component code.
+5. **Adding a model is one entry** in `src/shared/imageModels.js` (images) or
+   `src/shared/videoModels.js` (video). Both catalogues are shared by two tools,
+   so an entry appears in each — an image model without an `imageField` is left
+   out of the Image Chain Studio, which has nothing to chain through. The UI
+   rebuilds itself from the entry; don't special-case a model in component code.
 6. **A generation is a "run", and runs are shared machinery.** Every tool
    normalises its cards to one item shape and drives them through
    `useGenerationRun` (`src/shared/useGenerationRun.js`), which owns the item
    list, its persistence, recovering an unfinished run on load, the history of
    finished runs, the browser tab title and the close-the-tab warning. A tool
    supplies its inputs, its runner loop and its card component — nothing else.
+   (`continueRun()` is the one exception to a run being over when it is
+   archived: it takes the finished run back off the shelf, under the same id, so
+   the Image Chain Studio can append more steps to it.)
    Persisting more per item means adding the key to `PERSISTED_ITEM_KEYS` in
    `src/shared/runs.js`; that whitelist is what keeps image data URIs out of
    `localStorage`, so never widen it to a data URI.
-7. **Adding a tool is three edits**: an HTML entry at the root, an input in
-   `vite.config.js`, an entry in `server/routes.js`, which is the source of truth
-   for which tools exist.
+7. **Adding a tool is four edits**: an HTML entry at the root, an input in
+   `vite.config.js`, an entry in `server/routes.js` — the source of truth for
+   which tools exist — and one in `src/shared/tools.js`, which is what the tools
+   sidebar puts in front of people. The two lists are deliberately not the same
+   (the Prompt Box mockup is routed but not offered); a test asserts every
+   navigable tool is a real route, so they can't drift into a dead link.
 
 ## Routing lives on the backend
 
 Each tool is a separate Vite HTML entry with its own JS bundle; there is no
-client-side router. The tools are genuinely independent — no shared shell, no
+client-side router — switching tools is a plain link, and the tools sidebar
+(`src/shared/components/ToolsSidebar.jsx`, opened from the `Tools` button in the
+`TopBar`) is a list of them. It replaced a tab per tool, which stopped fitting
+at four and wrapped on a phone; behind one button the bar keeps to three
+controls at any width. The tools are genuinely independent — no shared shell, no
 cross-tool state — so this keeps each bundle small (the heavy Batch Studio
 JavaScript never loads on the Prompt Box) and lets the server own routing.
 `vite build` emits `dist/`; `server/routes.js` maps clean routes to the built
@@ -63,23 +82,26 @@ HTML.
 
 ## Layout
 
-- `index.html` / `batch-videos.html` / `video-chain.html` / `prompt.html` —
-  Vite HTML entries, each loading a script from `src/entries/`.
-- `src/apps/` — the tools. Per-tool logic in `src/apps/batch/` (`models.js`,
-  `replicate.js`, `storage.js`), `src/apps/batchVideo/` (`items.js`,
-  `storage.js`) and `src/apps/video/` (`frames.js` — end-frame extraction via
-  off-screen `<video>` + canvas).
+- `index.html` / `image-chain.html` / `batch-videos.html` / `video-chain.html` /
+  `prompt.html` — Vite HTML entries, each loading a script from `src/entries/`.
+- `src/apps/` — the tools. Per-tool logic in `src/apps/batch/` (`storage.js`),
+  `src/apps/imageChain/` (`chain.js` — the step model, `video.js` — stitching the
+  chain into one video, `DownloadModal.jsx`, `storage.js`),
+  `src/apps/batchVideo/` (`items.js`, `storage.js`) and `src/apps/video/`
+  (`frames.js` — end-frame extraction via off-screen `<video>` + canvas).
 - `src/shared/` — what the tools are built from: `theme.css` (the Tailwind
   entry — `@theme` tokens, base styles, keyframes), `components/` (import from
-  `src/shared/components`, which also pulls in `theme.css`), `replicate.js`
+  `src/shared/components`, which also pulls in `theme.css`), `tools.js` (the
+  tool list behind the sidebar), `replicate.js`
   (prediction create / poll / output helpers, the longer polling profile video
-  needs, and `friendlyErrorMessage()`), `videoModels.js` (video model catalogue
-  and input assembly, shared by both video tools), `storage.js`
+  needs, and `friendlyErrorMessage()`), `imageModels.js` and `videoModels.js`
+  (the model catalogues and their input assembly, one per medium and each shared
+  by two tools), `storage.js`
   (`createToolStorage(namespace)` — namespaced `localStorage` plus the
   current-run / run-history persistence, one prefix per tool), `apiKey.js`, `fields.js`,
   `useUnloadGuard.js`, plus the run machinery: `runs.js` (the run/item model —
   what is persisted, a run's progress, the tab title), `useGenerationRun.js`
-  (the hook the three tools share) and `download.js` (single-file and zip
+  (the hook every generation tool shares) and `download.js` (single-file and zip
   downloads).
 - `server/` — `index.js` (serves `dist/`, proxies Replicate), `proxy.js` (the
   proxy's request policy), `routes.js` (the route table).
@@ -114,6 +136,88 @@ Two details are easy to get wrong:
 The pre-run-model format (a flat `pendingJobs` list) is migrated into a run on
 first read, so a tab closed before this shipped still recovers.
 
+The Image Chain Studio is the one tool that can add to a finished run:
+`continueRun()` flips the archived run back to live, keeping its id, and the new
+steps are appended to it — archiving replaces the same history entry rather than
+leaving a shorter copy behind. It can do this at all because what links two
+steps is the earlier step's `outputUrl`, which is persisted, so a chain
+recovered from a closed tab or reopened from history continues where it stopped.
+The same URL is what a retry reuses: a failed step is replaced in place with a
+fresh one at the same number, handed the newest image _before_ it
+(`chainSource(items, index)`), so a failure anywhere in the chain — the first
+step included — is recoverable without starting over. Each step records the
+label of the step it came from (`from`, persisted) rather than deriving it, so
+retrying one step never rewrites what another card says it used. A failed step
+can also be deleted (`removeItem()` on the hook); losing a run's last item
+clears it from storage — `clearCurrentRun()`, or `removeHistoryRun()` once it
+has been archived — so an empty run is not recovered on the next load or left
+sitting in the history list.
+(The video chain cannot: its link is an extracted frame that only exists in the
+tab that made it. Replicate's result URLs do expire, so continuing a chain from
+much later fails at the model rather than in the UI.)
+
+## Results outlive Replicate, on purpose
+
+Replicate deletes an API prediction's output files an hour after the prediction
+ran — the file, not just the signature on the URL, so re-fetching the prediction
+returns a link to nothing. A long batch or chain can finish with its earliest
+results already gone, and a run reopened from History is older than that by
+definition.
+
+So `src/shared/outputCache.js` copies every output into **IndexedDB the moment
+it lands**, while the URL is still good, and everything downstream reads the
+cache before the network: the result cards (`useCachedImage`), the single
+downloads and zips (`download.js`), and the image chain's video encoder. The
+copy is per browser, on the user's own machine — no server sees it, so the trust
+model is unchanged, but note it _is_ a change to "nothing is stored": the
+outputs are now on disk locally, and the History modal says so.
+
+- **The write happens in `useGenerationRun.updateItem`**, not in each tool: any
+  patch carrying an `outputUrl` triggers the copy, so all four tools got this at
+  one call site. It is deliberately not awaited — a run is never held up by
+  caching, and a failed copy just means falling back to the URL later.
+- **Keys are `tool/runId/itemId`** (`cacheKey`), which is what lets a run's files
+  be dropped in one go when its history entry is cleared, and keeps two tools
+  from colliding on an item id.
+- **The store is bounded** (`MAX_BYTES`, 500 MB) and evicts oldest-first
+  (`planEviction`), so a browser profile can't fill up with a year of
+  generations. A run pushed off the end of the capped history list keeps its
+  files until that eviction reaches them.
+- **Every path degrades to the network.** No IndexedDB (private mode, blocked
+  storage), a quota error, a failed copy — all of it resolves to "no cached
+  blob", and the download falls back to the URL. What it must never do is throw
+  into a run.
+- **A zip that comes up short says so.** `downloadZip` returns the names it
+  could not find anywhere; the tools surface that instead of handing over a zip
+  that is quietly three images light.
+
+## Stitching a chain into a video
+
+`src/apps/imageChain/video.js` turns a finished image chain into one video, in
+the browser: each image is drawn on a canvas, held for the chosen number of
+milliseconds, encoded with **WebCodecs** and muxed by `mp4-muxer` or
+`webm-muxer` (both imported on demand, like JSZip, so nothing loads until the
+download modal asks for it). No upload, no ffmpeg-sized dependency, same trust
+model as the rest of the app.
+
+Three things there are less obvious than they look:
+
+- **The format is not a given.** H.264 in MP4 is what every player takes, but a
+  Chromium built without proprietary codecs (and Firefox) has WebCodecs and no
+  H.264 encoder at all, so the encoding is chosen by asking
+  `VideoEncoder.isConfigSupported` down a list — H.264 first, then VP9 and VP8
+  in WebM — and the file is named after what came back. The H.264 candidates
+  differ only in profile/level because a level caps the frame size it accepts
+  (baseline 3.1 is already too small for a 1024×1024 image).
+- **WebM needs a marker frame at the end.** `webm-muxer` takes the segment
+  duration from the last block's timestamp and ignores its `BlockDuration`, so
+  without one repeat of the final image, timed one hold later, the file claims
+  to be a frame short and players cut the last image off. `mp4-muxer` adds the
+  last sample's own duration, so the MP4 path must _not_ do this.
+- **Looping stops one short.** The frame order for a loop is the chain forwards
+  then back down it, ending on the second image: the player's own loop supplies
+  the return to the first, so it doesn't sit on a doubled frame at the seam.
+
 ## What the proxy allows, and why
 
 `api.replicate.com` sends no CORS headers, so the proxy is what makes any call
@@ -145,23 +249,46 @@ gone there.
 the modules touch (`localStorage`, `fetch`). Covered: the proxy's request policy,
 the prediction polling loop, per-model input assembly for images and video, the
 run model (what is persisted, a run's progress, the tab title), namespaced
-storage with its current-run / history persistence and the legacy migration, and
-the Batch Video run-item flattening including its download filename stems.
+storage with its current-run / history persistence, removing a run from history
+and the legacy migration, the output cache's keys and its eviction plan, the
+Batch Video run-item flattening including its download filename stems, and the
+Image Chain step model (the step a chain continues from or a retry goes back to,
+its numbering, the step count parsing and the download filename stems) and its
+video arithmetic (the frame order with and without a loop, the resulting length,
+the duration parsing).
 
 `useGenerationRun` has no unit coverage — it is a hook over `localStorage`,
 `document.title` and `beforeunload`, and the node test environment has none of
 them. Its behaviour was verified in a real browser (Chromium + Playwright,
-driving the three tools against a stubbed `/v1`): progress and completion in the
+driving the tools against a stubbed `/v1`): progress and completion in the
 tab title, the run persisted with its prediction ids, no data URIs in what is
 stored, the `beforeunload` guard only while something is in flight, a run
 archived to history with its final statuses, an unfinished run recovered on load
 without creating a new prediction, and reopening a run from history. That script
 is not in the repo — it wants a proper Playwright suite, alongside the one
-`frames.js` needs. Changes to the hook need the same check by hand.
+`frames.js` needs. Changes to the hook need the same check by hand: `continueRun`
+was verified the same way (Chromium + Playwright against a stubbed `/v1`, driving
+the Image Chain Studio) — a chain generated, continued into the same history
+entry, recovered mid-step on reload and then continued from the recovered
+image, with each step's request carrying the previous step's output URL. The
+per-step retry was checked the same way, against a stub that fails on demand: a
+failed first step retried in place, a mid-chain failure retried with the image
+before it rather than a later one, and no extra cards or history entries left
+behind, a failed step deleted from a chain (persisted, with the surviving steps
+keeping their numbers and the next batch still starting from the last image),
+and deleting a run's last step clearing it from storage instead of leaving an
+empty run to recover. The video was checked the same way, by building one and
+reading the duration back out of the container: four images at 120ms produce a
+480ms file, the same chain looped produces 720ms (six frames), and the download
+is named after the container it turned out to be. That Chromium has no H.264
+encoder, so it exercised the WebM path; the MP4 path's timing was checked
+separately against `mp4-muxer` directly (four 120ms samples → a 480ms file),
+and a real H.264 encode still wants a look on a browser that has one.
 
-`src/apps/video/frames.js` has **no** automated coverage — jsdom can't decode
-video, so a test there would assert nothing meaningful; it wants a Playwright
-test. It's the subtlest code in the repo, so changes need manual verification in
+`src/apps/video/frames.js` and `src/apps/imageChain/video.js` have **no**
+automated coverage of the media parts — jsdom can't decode video and the node
+environment has no WebCodecs, so a test there would assert nothing meaningful;
+they want a Playwright test. It's the subtlest code in the repo, so changes need manual verification in
 a real browser, and say so rather than implying tests cover it.
 
 One ESLint choice worth knowing: `eslint.config.js` enables

@@ -85,7 +85,7 @@ function FrameThumb({ label, dataUri, filename }) {
   );
 }
 
-function ClipCard({ clip }) {
+function ClipCard({ clip, cacheKey }) {
   const { index, status, startFrame, endFrame, videoUrl, outputUrl, error } = clip;
   const n = clipNo(index);
   // `videoUrl` is the in-memory blob of a clip generated in this tab; a clip
@@ -147,7 +147,7 @@ function ClipCard({ clip }) {
                 onClick={() =>
                   videoUrl
                     ? triggerDownload(videoUrl, clipName(clip))
-                    : downloadUrl(outputUrl, clipName(clip))
+                    : downloadUrl(outputUrl, clipName(clip), cacheKey)
                 }
               >
                 Video
@@ -420,7 +420,8 @@ export default function ContinuousVideoStudio() {
         // A clip generated in this tab is already in memory; a recovered one is
         // fetched back from Replicate.
         if (blob) entries.push({ name: clipName(c), blob });
-        else if (c.outputUrl) entries.push({ name: clipName(c), url: c.outputUrl });
+        else if (c.outputUrl)
+          entries.push({ name: clipName(c), url: c.outputUrl, key: gen.outputKey(c) });
         if (c.startFrame)
           entries.push({
             name: `clip-${n}-start-frame.${frameExt(c.startFrame)}`,
@@ -432,7 +433,16 @@ export default function ContinuousVideoStudio() {
             base64: c.endFrame.split(',')[1],
           });
       }
-      await downloadZip('karmalab-video-chain.zip', entries);
+      // Replicate deletes a result an hour after it was made, so anything the
+      // cache missed can be gone by download time. Say which, rather than
+      // handing over a zip that is quietly short.
+      const { missing } = await downloadZip('karmalab-video-chain.zip', entries);
+      if (missing.length) {
+        setRunHint({
+          text: `${missing.length} file(s) could not be included — Replicate deletes results an hour after they are made, and these were not cached.`,
+          isError: true,
+        });
+      }
     } catch (e) {
       alert('Could not build the zip file: ' + e.message);
     }
@@ -668,7 +678,7 @@ export default function ContinuousVideoStudio() {
           ) : (
             <div className="grid grid-cols-[repeat(auto-fill,minmax(290px,1fr))] gap-3.5 mt-1">
               {clips.map((c) => (
-                <ClipCard key={c.id} clip={c} />
+                <ClipCard key={c.id} clip={c} cacheKey={gen.outputKey(c)} />
               ))}
             </div>
           )}

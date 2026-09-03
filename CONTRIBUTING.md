@@ -30,7 +30,9 @@ settles formatting — don't hand-format against it.
 
 One entry in a config file; the UI rebuilds itself from it.
 
-- Images: `src/apps/batch/models.js`
+- Images: `src/shared/imageModels.js` — shared by the Batch Image Studio and the
+  Image Chain Studio, so one entry appears in each. A model without an
+  `imageField` can't be chained and is left out of the chain tool.
 - Video: `src/shared/videoModels.js` — shared by both video tools, so one entry
   appears in each. Check it works in both.
 
@@ -48,6 +50,8 @@ schemas differ in small ways that are easy to get wrong on paper.
    `src/entries/`.
 2. That input registered in `vite.config.js`.
 3. One entry in `server/routes.js`.
+4. One entry in `src/shared/tools.js`, so it shows up in the tools sidebar. A
+   test checks every tool listed there is a real route.
 
 Then build it in `src/apps/`, using the shared components from
 `src/shared/components`. Keep it independent — the tools share no state or shell,

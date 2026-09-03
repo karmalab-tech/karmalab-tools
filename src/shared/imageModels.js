@@ -1,18 +1,21 @@
-// Per-model configuration for the Batch Image Studio.
+// Per-model configuration for the image tools (Batch Image Studio and Image
+// Chain Studio) — one shared catalogue of Replicate image models.
 //
 // Each entry is the single source of truth for how a model differs:
 //   label         — shown in the model <select>
 //   aspectField   — the Replicate input key for size/ratio ('aspect_ratio' or 'size')
 //   aspectOptions — {value, label} pairs for the aspect <select>
 //   aspectNote    — optional note shown under the dropdown for real limitations
-//   imageField    — Replicate input key for a reference image, or null if unsupported
-//   imageIsArray  — whether that field expects [dataUri] vs a bare dataUri string
+//   imageField    — Replicate input key for a reference image, or null if
+//                   unsupported (a model without one cannot be chained)
+//   imageIsArray  — whether that field expects [reference] vs a bare string
 //   extraInput    — static extra fields always sent (e.g. { quality: 'high' })
 //   extraFields   — user-fillable extra inputs rendered dynamically. A field
 //                   with type 'apiKey' is managed by the shared ApiKeyModal —
 //                   the tool renders a button that opens it instead of an input
 //
-// To add a model, add one entry here — the UI rebuilds itself from it.
+// To add a model, add one entry here — the UI of both tools rebuilds itself
+// from it, so check a new entry in each.
 
 export const RATIOS = [
   { value: '1:1', label: 'Square · 1:1' },
@@ -127,3 +130,30 @@ export const EXTRA_FIELD_KEYS = [
     )
   ),
 ];
+
+// The models that can start from a reference image, and so can be chained by
+// the Image Chain Studio — where every step but the first is fed the previous
+// step's output.
+export const CHAIN_MODEL_KEYS = MODEL_KEYS.filter((k) => MODEL_CONFIGS[k].imageField);
+
+// Assemble the Replicate `input` object for one prompt from a config snapshot.
+// `referenceImage` is either an uploaded image's data URI or a URL Replicate can
+// fetch — the Image Chain Studio passes the previous step's output URL.
+export function buildImageInput(cfg, { promptText, suffix, aspect, referenceImage, extraValues }) {
+  const trimmedSuffix = (suffix || '').trim();
+  const finalPrompt = trimmedSuffix ? `${promptText} ${trimmedSuffix}`.trim() : promptText;
+  const input = { prompt: finalPrompt, ...(cfg.extraInput || {}) };
+
+  if (cfg.aspectField) input[cfg.aspectField] = aspect;
+
+  if (cfg.imageField && referenceImage) {
+    input[cfg.imageField] = cfg.imageIsArray ? [referenceImage] : referenceImage;
+  }
+
+  (cfg.extraFields || []).forEach((f) => {
+    const value = ((extraValues || {})[f.key] || '').trim();
+    if (value) input[f.key] = value;
+  });
+
+  return input;
+}

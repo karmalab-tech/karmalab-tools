@@ -42,13 +42,13 @@ import { storage } from './batchVideo/storage.js';
 
 const videoName = (item) => `${item.basename || `video-${item.id}`}.mp4`;
 
-function ResultCard({ result }) {
+function ResultCard({ result, cacheKey }) {
   const [downloading, setDownloading] = useState(false);
   const { label, prompt, status, outputUrl, startFrame, error } = result;
 
   async function download() {
     setDownloading(true);
-    await downloadUrl(outputUrl, videoName(result));
+    await downloadUrl(outputUrl, videoName(result), cacheKey);
     setDownloading(false);
   }
 
@@ -275,13 +275,22 @@ export default function BatchVideoStudio() {
     setRunHint({ text: 'Cancelling — finishing in-flight requests…', isError: false });
   }
 
+  // Replicate deletes a result an hour after it was made, so anything the cache
+  // missed can be gone by download time. Say which, rather than handing over a
+  // zip that is quietly short.
   async function downloadAll() {
     setDownloadLabel('Zipping…');
     try {
-      await downloadZip(
+      const { missing } = await downloadZip(
         'karmalab-videos.zip',
-        succeeded.map((r) => ({ name: videoName(r), url: r.outputUrl }))
+        succeeded.map((r) => ({ name: videoName(r), url: r.outputUrl, key: gen.outputKey(r) }))
       );
+      if (missing.length) {
+        setRunHint({
+          text: `${missing.length} of ${succeeded.length} could not be included — Replicate deletes results an hour after they are made, and these were not cached.`,
+          isError: true,
+        });
+      }
     } catch (e) {
       alert('Could not build the zip file: ' + e.message);
     }
@@ -490,7 +499,7 @@ export default function BatchVideoStudio() {
           ) : (
             <div className="grid grid-cols-[repeat(auto-fill,minmax(290px,1fr))] gap-3.5 mt-1">
               {gen.items.map((r) => (
-                <ResultCard key={r.id} result={r} />
+                <ResultCard key={r.id} result={r} cacheKey={gen.outputKey(r)} />
               ))}
             </div>
           )}

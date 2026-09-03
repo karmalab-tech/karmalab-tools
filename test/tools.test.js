@@ -1,71 +1,101 @@
 // The tools' own logic: what each model wants as input, what persists between
 // sessions (the run recovered after a closed tab, and the history of finished
-// runs), and how the Batch Video Studio's two modes flatten into one run list.
+// runs), how the Batch Video Studio's two modes flatten into one run list, and
+// how the Image Chain Studio finds the step a chain continues from.
 // None of it needs a DOM; `localStorage` is stubbed where it is touched.
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { buildInput } from '../src/apps/batch/replicate.js';
+import { CHAIN_MODEL_KEYS, MODEL_CONFIGS, buildImageInput } from '../src/shared/imageModels.js';
 import { buildVideoInput } from '../src/shared/videoModels.js';
 import { loadKey, saveKey, storage } from '../src/apps/batch/storage.js';
 import { HISTORY_LIMIT, createToolStorage } from '../src/shared/storage.js';
+import { TOOLS, toolLabel } from '../src/shared/tools.js';
+import {
+  MAX_BYTES,
+  cacheKey,
+  cacheSupported,
+  formatBytes,
+  keyRun,
+  planEviction,
+} from '../src/shared/outputCache.js';
+import { routes } from '../server/routes.js';
 import { runCounts, runStatus, runTabTitle, serializeItem, uiStatus } from '../src/shared/runs.js';
 import { buildItems, splitPrompts } from '../src/apps/batchVideo/items.js';
+import {
+  MAX_STEPS,
+  chainSource,
+  imageName,
+  nextStepIndex,
+  parseStepCount,
+  sourceLabel,
+  stepId,
+} from '../src/apps/imageChain/chain.js';
+import {
+  DEFAULT_MS_PER_IMAGE,
+  MAX_MS_PER_IMAGE,
+  MIN_MS_PER_IMAGE,
+  frameSequence,
+  parseDurationMs,
+  totalDurationMs,
+} from '../src/apps/imageChain/video.js';
 
 const base = { promptText: 'a cat', suffix: '', aspect: '1:1', extraValues: {} };
 
-describe('buildInput', () => {
+describe('buildImageInput', () => {
   it('sends the prompt as-is when there is no suffix', () => {
-    expect(buildInput({}, base)).toEqual({ prompt: 'a cat' });
+    expect(buildImageInput({}, base)).toEqual({ prompt: 'a cat' });
   });
 
   it('appends a suffix and collapses the whitespace', () => {
-    expect(buildInput({}, { ...base, suffix: '  in watercolour  ' })).toEqual({
+    expect(buildImageInput({}, { ...base, suffix: '  in watercolour  ' })).toEqual({
       prompt: 'a cat in watercolour',
     });
   });
 
   it('treats a whitespace-only suffix as absent', () => {
-    expect(buildInput({}, { ...base, suffix: '   ' })).toEqual({ prompt: 'a cat' });
+    expect(buildImageInput({}, { ...base, suffix: '   ' })).toEqual({ prompt: 'a cat' });
   });
 
   it('writes the aspect to whichever key the model uses', () => {
-    expect(buildInput({ aspectField: 'aspect_ratio' }, base).aspect_ratio).toBe('1:1');
-    expect(buildInput({ aspectField: 'size' }, base).size).toBe('1:1');
+    expect(buildImageInput({ aspectField: 'aspect_ratio' }, base).aspect_ratio).toBe('1:1');
+    expect(buildImageInput({ aspectField: 'size' }, base).size).toBe('1:1');
   });
 
   it('omits the aspect entirely for a model that takes none', () => {
-    expect(buildInput({}, base)).not.toHaveProperty('aspect_ratio');
+    expect(buildImageInput({}, base)).not.toHaveProperty('aspect_ratio');
   });
 
   it("carries the model's static extra input", () => {
-    expect(buildInput({ extraInput: { quality: 'high' } }, base)).toEqual({
+    expect(buildImageInput({ extraInput: { quality: 'high' } }, base)).toEqual({
       prompt: 'a cat',
       quality: 'high',
     });
   });
 
   it('sends a reference image bare or wrapped, per the model', () => {
-    const withImage = { ...base, referenceImageDataUri: 'data:image/png;base64,AAA' };
-    expect(buildInput({ imageField: 'image' }, withImage).image).toBe('data:image/png;base64,AAA');
+    const withImage = { ...base, referenceImage: 'data:image/png;base64,AAA' };
+    expect(buildImageInput({ imageField: 'image' }, withImage).image).toBe(
+      'data:image/png;base64,AAA'
+    );
     expect(
-      buildInput({ imageField: 'input_images', imageIsArray: true }, withImage).input_images
+      buildImageInput({ imageField: 'input_images', imageIsArray: true }, withImage).input_images
     ).toEqual(['data:image/png;base64,AAA']);
   });
 
   it('omits the image key when the model supports one but none was given', () => {
-    expect(buildInput({ imageField: 'image' }, base)).not.toHaveProperty('image');
+    expect(buildImageInput({ imageField: 'image' }, base)).not.toHaveProperty('image');
   });
 
   it('drops an image the model cannot accept', () => {
-    const withImage = { ...base, referenceImageDataUri: 'data:image/png;base64,AAA' };
-    expect(buildInput({ imageField: null }, withImage)).toEqual({ prompt: 'a cat' });
+    const withImage = { ...base, referenceImage: 'data:image/png;base64,AAA' };
+    expect(buildImageInput({ imageField: null }, withImage)).toEqual({ prompt: 'a cat' });
   });
 
   it('includes filled-in extra fields and skips blank ones', () => {
     const cfg = {
       extraFields: [{ key: 'openai_api_key' }, { key: 'negative_prompt' }, { key: 'seed' }],
     };
-    const input = buildInput(cfg, {
+    const input = buildImageInput(cfg, {
       ...base,
       extraValues: { openai_api_key: '  sk-test  ', negative_prompt: '', seed: '   ' },
     });
@@ -75,7 +105,7 @@ describe('buildInput', () => {
   });
 
   it("lets an extra field override the model's static input", () => {
-    const input = buildInput(
+    const input = buildImageInput(
       { extraInput: { quality: 'high' }, extraFields: [{ key: 'quality' }] },
       { ...base, extraValues: { quality: 'low' } }
     );
@@ -136,7 +166,7 @@ describe('buildVideoInput', () => {
   });
 });
 
-// The run model the three tools normalise their cards to: what gets persisted,
+// The run model every tool normalises its cards to: what gets persisted,
 // what a run's progress adds up to, and what the browser tab says about it.
 describe('serializeItem', () => {
   it('keeps the fields a recovered card is rebuilt from', () => {
@@ -394,6 +424,19 @@ describe('run history', () => {
     const history = storage.loadHistory();
     expect(history).toHaveLength(1);
     expect(history[0].title).toBe('second');
+  });
+
+  it('removes a run from the list', () => {
+    storage.archiveRun(run({ id: 'run-1' }));
+    storage.archiveRun(run({ id: 'run-2' }));
+    storage.removeHistoryRun('run-1');
+    expect(storage.loadHistory().map((r) => r.id)).toEqual(['run-2']);
+  });
+
+  it('leaves the list alone when removing a run that is not in it', () => {
+    storage.archiveRun(run({ id: 'run-1' }));
+    storage.removeHistoryRun('run-nope');
+    expect(storage.loadHistory().map((r) => r.id)).toEqual(['run-1']);
   });
 
   it('caps the list so it cannot grow without bound', () => {
@@ -657,5 +700,250 @@ describe('buildItems, frames mode', () => {
 
   it('returns nothing when no frames were uploaded', () => {
     expect(buildItems({ mode: 'frames', prompt: 'x', frames: [] })).toEqual([]);
+  });
+});
+
+// The Image Chain Studio's step model. What links two steps is the earlier
+// one's output URL, so most of the chain's logic is picking the right step to
+// carry on from — including when the last one failed.
+describe('the chainable image models', () => {
+  it('lists only the models that take a reference image', () => {
+    expect(CHAIN_MODEL_KEYS.length).toBeGreaterThan(0);
+    CHAIN_MODEL_KEYS.forEach((k) => expect(MODEL_CONFIGS[k].imageField).toBeTruthy());
+  });
+
+  it('leaves out a model that cannot take one', () => {
+    const textOnly = Object.keys(MODEL_CONFIGS).filter((k) => !MODEL_CONFIGS[k].imageField);
+    textOnly.forEach((k) => expect(CHAIN_MODEL_KEYS).not.toContain(k));
+  });
+});
+
+describe('parseStepCount', () => {
+  it('reads a whole number of steps', () => {
+    expect(parseStepCount('4')).toBe(4);
+    expect(parseStepCount(' 12 ')).toBe(12);
+  });
+
+  it('caps a runaway at the maximum', () => {
+    expect(parseStepCount('900')).toBe(MAX_STEPS);
+  });
+
+  it('rejects anything that is not a chain', () => {
+    expect(parseStepCount('0')).toBeNull();
+    expect(parseStepCount('-3')).toBeNull();
+    expect(parseStepCount('')).toBeNull();
+    expect(parseStepCount('abc')).toBeNull();
+    expect(parseStepCount(undefined)).toBeNull();
+  });
+});
+
+describe('chainSource', () => {
+  const step = (index, status, outputUrl = null) => ({
+    id: stepId(index),
+    index,
+    status,
+    outputUrl,
+    label: `Step ${index + 1}`,
+  });
+
+  it('is the newest step that produced an image', () => {
+    const items = [step(0, 'succeeded', 'a.png'), step(1, 'succeeded', 'b.png')];
+    expect(chainSource(items).outputUrl).toBe('b.png');
+  });
+
+  it('skips a failed tail, so an error does not end the chain', () => {
+    const items = [step(0, 'succeeded', 'a.png'), step(1, 'failed'), step(2, 'failed')];
+    expect(chainSource(items).outputUrl).toBe('a.png');
+  });
+
+  it('ignores a step marked succeeded with no image', () => {
+    expect(chainSource([step(0, 'succeeded')])).toBeNull();
+  });
+
+  it('is null for a chain with nothing to continue from', () => {
+    expect(chainSource([])).toBeNull();
+    expect(chainSource([step(0, 'running')])).toBeNull();
+  });
+
+  it('hands a retried step the image it was given before, not a later one', () => {
+    const items = [
+      step(0, 'succeeded', 'a.png'),
+      step(1, 'succeeded', 'b.png'),
+      step(2, 'failed'),
+      step(3, 'succeeded', 'd.png'),
+    ];
+    // Retrying step 3 (index 2) continues from step 2, even though step 4 has
+    // since produced an image of its own.
+    expect(chainSource(items, 2).outputUrl).toBe('b.png');
+    // The first step has nothing before it — it starts the chain.
+    expect(chainSource(items, 0)).toBeNull();
+  });
+
+  it('names the step an image came from, and nothing for the chain start', () => {
+    expect(sourceLabel(step(1, 'succeeded', 'b.png'))).toBe('Step 2');
+    expect(sourceLabel({ index: 4, status: 'succeeded', outputUrl: 'e.png' })).toBe('Step 5');
+    expect(sourceLabel(null)).toBe('');
+  });
+});
+
+describe('nextStepIndex', () => {
+  it('starts a new chain at zero', () => {
+    expect(nextStepIndex([])).toBe(0);
+  });
+
+  it('carries on past every step, failed ones included', () => {
+    const items = [
+      { index: 0, status: 'succeeded' },
+      { index: 1, status: 'failed' },
+      { index: 2, status: 'succeeded' },
+    ];
+    expect(nextStepIndex(items)).toBe(3);
+  });
+
+  it('follows the indexes a recovered chain came back with', () => {
+    expect(nextStepIndex([{ index: 7, status: 'succeeded' }])).toBe(8);
+  });
+});
+
+describe('a step download name', () => {
+  it('is the step number, padded', () => {
+    expect(imageName({ index: 0, basename: 'image-01' })).toBe('image-01.png');
+    expect(imageName({ index: 11, basename: 'image-12' })).toBe('image-12.png');
+  });
+
+  it('falls back to the index when a recovered step has no basename', () => {
+    expect(imageName({ index: 4 })).toBe('image-05.png');
+  });
+});
+
+// Stitching a chain into one video. Only the parts that are arithmetic are
+// covered — the encoding itself drives WebCodecs and a canvas, which the node
+// test environment has none of, so it is verified in a real browser instead.
+describe('the video frame order', () => {
+  it('is the chain, in order', () => {
+    expect(frameSequence(4, false)).toEqual([0, 1, 2, 3]);
+  });
+
+  it('comes back down the chain when looping, without repeating either end', () => {
+    // 1,2,3,4,3,2 — the player's own loop supplies the return to image 1, so it
+    // is not held twice at the seam.
+    expect(frameSequence(4, true)).toEqual([0, 1, 2, 3, 2, 1]);
+  });
+
+  it('has nothing to loop through with fewer than three images', () => {
+    expect(frameSequence(2, true)).toEqual([0, 1]);
+    expect(frameSequence(1, true)).toEqual([0]);
+    expect(frameSequence(0, true)).toEqual([]);
+  });
+
+  it('gives a looped video very nearly twice the length', () => {
+    expect(totalDurationMs(4, 200, false)).toBe(800);
+    expect(totalDurationMs(4, 200, true)).toBe(1200);
+    expect(totalDurationMs(1, 200, false)).toBe(200);
+  });
+});
+
+describe('parseDurationMs', () => {
+  it('reads a whole number of milliseconds', () => {
+    expect(parseDurationMs('200')).toBe(200);
+    expect(parseDurationMs(' 40 ')).toBe(40);
+    expect(parseDurationMs(String(DEFAULT_MS_PER_IMAGE))).toBe(DEFAULT_MS_PER_IMAGE);
+  });
+
+  it('caps a very long hold', () => {
+    expect(parseDurationMs('999999')).toBe(MAX_MS_PER_IMAGE);
+  });
+
+  it('rejects anything under a frame or not a number', () => {
+    expect(parseDurationMs(String(MIN_MS_PER_IMAGE - 1))).toBeNull();
+    expect(parseDurationMs('0')).toBeNull();
+    expect(parseDurationMs('-100')).toBeNull();
+    expect(parseDurationMs('')).toBeNull();
+    expect(parseDurationMs('soon')).toBeNull();
+  });
+});
+
+// The tools sidebar lists what the UI offers; server/routes.js is the source of
+// truth for what exists. They are two lists, so this is what stops them
+// drifting into a dead link.
+describe('the tools in the navigation', () => {
+  it('all point at a real route', () => {
+    const paths = routes.map((r) => r.path);
+    TOOLS.forEach((tool) => expect(paths).toContain(tool.path));
+  });
+
+  it('leaves out the Prompt Box mockup', () => {
+    expect(TOOLS.map((t) => t.path)).not.toContain('/prompt');
+  });
+
+  it('gives every tool a name and a line about it', () => {
+    TOOLS.forEach((tool) => {
+      expect(tool.label).toBeTruthy();
+      expect(tool.blurb).toBeTruthy();
+    });
+  });
+
+  it('names the tool at a path, and nothing at an unknown one', () => {
+    expect(toolLabel('/image-chain')).toBe('Image Chain');
+    expect(toolLabel('/prompt')).toBe('');
+  });
+});
+
+// Keeping results after Replicate deletes them (an hour after they are made).
+// The IndexedDB side needs a browser and is verified there; what is arithmetic
+// — the keys, and what gets evicted when the store is full — is covered here.
+describe('the output cache keys', () => {
+  it('namespace a run and its items', () => {
+    expect(cacheKey('imageChainStudio', 'run-1', 'step-2')).toBe('imageChainStudio/run-1/step-2');
+  });
+
+  it('can be traced back to their run', () => {
+    expect(keyRun('imageChainStudio/run-1/step-2')).toBe('imageChainStudio/run-1');
+  });
+
+  it('keep two tools apart at the same item id', () => {
+    expect(cacheKey('batchImageStudio', 'run-1', 'r1')).not.toBe(
+      cacheKey('batchVideoStudio', 'run-1', 'r1')
+    );
+  });
+
+  it('reports whether this environment can cache at all', () => {
+    // Node has no IndexedDB, so every caller must cope with it being absent.
+    expect(cacheSupported()).toBe(false);
+  });
+});
+
+describe('planEviction', () => {
+  const entry = (key, bytes, savedAt) => ({ key, bytes, savedAt });
+
+  it('keeps everything while there is room', () => {
+    expect(planEviction([entry('a', 10, 1), entry('b', 10, 2)], 100)).toEqual([]);
+  });
+
+  it('drops the oldest first, and only as many as it takes', () => {
+    const entries = [entry('old', 40, 1), entry('mid', 40, 2), entry('new', 40, 3)];
+    expect(planEviction(entries, 100)).toEqual(['old']);
+  });
+
+  it('keeps dropping until it is under the cap', () => {
+    const entries = [entry('old', 40, 1), entry('mid', 40, 2), entry('new', 40, 3)];
+    expect(planEviction(entries, 50)).toEqual(['old', 'mid']);
+  });
+
+  it('handles an entry that never recorded its size', () => {
+    expect(planEviction([entry('a', undefined, 1), entry('b', 10, 2)], 5)).toEqual(['a', 'b']);
+  });
+
+  it('has a default cap in the hundreds of megabytes', () => {
+    expect(MAX_BYTES).toBeGreaterThan(100 * 1024 * 1024);
+  });
+});
+
+describe('formatBytes', () => {
+  it('reads as megabytes, with kilobytes for the small stuff', () => {
+    expect(formatBytes(0)).toBe('0 MB');
+    expect(formatBytes(2 * 1024 * 1024)).toBe('2.0 MB');
+    expect(formatBytes(400 * 1024)).toBe('400 KB');
+    expect(formatBytes(250 * 1024 * 1024)).toBe('250 MB');
   });
 });

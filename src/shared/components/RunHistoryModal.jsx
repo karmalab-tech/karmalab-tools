@@ -5,7 +5,7 @@ import { StatusPill } from './StatusPill.jsx';
 import { FIELD_HELP } from '../fields.js';
 import { formatRunTime, runCounts, runStatus, runSummary } from '../runs.js';
 
-// The history of finished generations, shared by the three tools. Runs come
+// The history of finished generations, shared by the generation tools. Runs come
 // from localStorage (see src/shared/runs.js), newest first; picking one loads it
 // back into the tool, which then refreshes each item's status from Replicate.
 export function RunHistoryModal({ open, runs, currentRunId, onSelect, onClose, onClear }) {
@@ -69,8 +69,9 @@ export function RunHistoryModal({ open, runs, currentRunId, onSelect, onClose, o
         )}
 
         <div className={`${FIELD_HELP} mt-4`}>
-          Kept in this browser only. Opening a generation loads it back into the tool and refreshes
-          it from Replicate — result links expire after a while, so an older one may no longer play.
+          Kept in this browser only, results included: Replicate deletes those an hour after they
+          are made, so what you see and download from an older generation is the copy this browser
+          saved. Clearing the history deletes those copies too.
         </div>
         <div className="flex gap-2 mt-4">
           {runs.length > 0 && (

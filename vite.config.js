@@ -17,6 +17,7 @@ export default defineConfig({
       input: {
         index: 'index.html',
         prompt: 'prompt.html',
+        'image-chain': 'image-chain.html',
         'video-chain': 'video-chain.html',
         'batch-videos': 'batch-videos.html',
       },

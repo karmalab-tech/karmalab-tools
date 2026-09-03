@@ -12,6 +12,7 @@ export { Brand } from './Brand.jsx';
 export { ImageDrop } from './ImageDrop.jsx';
 export { ImagesDrop } from './ImagesDrop.jsx';
 export { TopBar } from './TopBar.jsx';
+export { ToolsSidebar } from './ToolsSidebar.jsx';
 export { ApiKeyModal } from './ApiKeyModal.jsx';
 export { StatusPill } from './StatusPill.jsx';
 export { RunHistoryModal } from './RunHistoryModal.jsx';

@@ -1,7 +1,8 @@
-// The "run" model shared by the three generation tools.
+// The "run" model shared by the generation tools.
 //
 // A run is one generation the user kicked off — a batch of images, a batch of
-// videos, a chain of clips — together with the items it produced. Runs are the
+// videos, a chain of clips, a chain of images — together with the items it
+// produced. Runs are the
 // unit that survives a closed tab: the run in progress is written to
 // localStorage on every change (src/shared/storage.js), so a fresh page load
 // can pick it back up, refresh each item's status from Replicate and carry on
@@ -9,9 +10,9 @@
 //
 // Every tool normalises its cards to the same item shape, which is what makes
 // the persistence, the recovery, the history modal and the tab title one
-// implementation instead of three:
+// implementation instead of one per tool:
 //
-//   { id, predictionId, status, prompt, label, basename, outputUrl, error, index }
+//   { id, predictionId, status, prompt, label, basename, outputUrl, error, index, from }
 //
 //   id           — stable UI key (the prediction id for a restored item)
 //   predictionId — the Replicate prediction, null until it has been created
@@ -21,7 +22,9 @@
 //   basename     — optional download filename stem (no extension)
 //   outputUrl    — the model's output URL once it succeeded
 //   error        — failure message, if any
-//   index        — optional position in the run (the video chain's clip number)
+//   index        — optional position in the run (a chain's clip or step number)
+//   from         — optional label of the item this one was generated from (the
+//                  image chain's previous step)
 //
 // Anything else a tool hangs off an item (start frames, object URLs, extracted
 // end frames) stays in memory only: PERSISTED_ITEM_KEYS is a whitelist, so
@@ -37,6 +40,7 @@ export const PERSISTED_ITEM_KEYS = [
   'outputUrl',
   'error',
   'index',
+  'from',
 ];
 
 export const isTerminalStatus = (status) => status === 'succeeded' || status === 'failed';

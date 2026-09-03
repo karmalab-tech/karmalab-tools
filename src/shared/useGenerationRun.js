@@ -6,10 +6,11 @@ import {
   getPrediction,
   pollPrediction,
 } from './replicate.js';
+import { cacheKey, cacheOutput, forgetRuns } from './outputCache.js';
 import { isActiveItem, newRunId, runCounts, runTabTitle, serializeRun, uiStatus } from './runs.js';
 import { useUnloadGuard } from './useUnloadGuard.js';
 
-// Everything the three generation tools share about a run: the item list, its
+// Everything the generation tools share about a run: the item list, its
 // persistence, recovering an unfinished run on load, the history of finished
 // runs, the tab title and the close-the-tab warning. Each tool keeps its own
 // inputs and its own runner loop, and calls in here for the rest.
@@ -18,6 +19,9 @@ import { useUnloadGuard } from './useUnloadGuard.js';
 //   gen.startRun({ title, items });   // begins a run (archives the last one)
 //   gen.updateItem(id, patch);        // as each prediction progresses
 //   gen.finishRun();                  // the runner is done
+//   gen.continueRun();                // reopen the finished run to add to it
+//   gen.removeItem(id);               // drop one item from the run
+//   gen.outputKey(item);              // its key in the output cache
 //
 // Options:
 //   storage       — a createToolStorage(namespace) instance (one per tool)
@@ -66,13 +70,51 @@ export function useGenerationRun({
     };
   }, []);
 
-  const updateItem = useCallback((id, patch) => {
-    setItems((prev) => prev.map((it) => (it.id === id ? { ...it, ...patch } : it)));
-  }, []);
+  // Every result that lands is also fetched into the output cache, there and
+  // then, while its URL is still good: Replicate deletes the file an hour
+  // later, so this is the only window there is. It is deliberately not awaited
+  // — the run carries on, and a download later falls back to the URL if the
+  // copy didn't happen.
+  const updateItem = useCallback(
+    (id, patch) => {
+      setItems((prev) => prev.map((it) => (it.id === id ? { ...it, ...patch } : it)));
+      const run = runRef.current;
+      if (patch.outputUrl && run)
+        cacheOutput(cacheKey(storage.namespace, run.id, id), patch.outputUrl);
+    },
+    [storage]
+  );
+
+  // Where an item's cached copy lives, for the download helpers to look it up.
+  const outputKey = useCallback(
+    (item) =>
+      runRef.current && item ? cacheKey(storage.namespace, runRef.current.id, item.id) : '',
+    [storage]
+  );
 
   const appendItems = useCallback((newItems) => {
     setItems((prev) => [...prev, ...newItems]);
   }, []);
+
+  // Drop one item from the run on screen — the Image Chain Studio deleting a
+  // step that failed. Taking the last one leaves no run at all, so it is
+  // cleared from storage as well; otherwise the empty run would come back on
+  // the next load, or sit in the history list with nothing in it.
+  const removeItem = useCallback(
+    (id) => {
+      const remaining = itemsRef.current.filter((it) => it.id !== id);
+      if (!remaining.length) {
+        const current = runRef.current;
+        if (current?.origin === 'history') storage.removeHistoryRun(current.id);
+        else if (current) storage.clearCurrentRun();
+        runRef.current = null;
+        setRun(null);
+      }
+      itemsRef.current = remaining;
+      setItems(remaining);
+    },
+    [storage]
+  );
 
   // Persist on every change. A live run is the one to recover on reload; a run
   // opened from history is written back in place, since refreshing it can move
@@ -245,6 +287,19 @@ export function useGenerationRun({
     [archive]
   );
 
+  // Take the run on screen back off the shelf so more items can be added to it:
+  // the Image Chain Studio continuing a finished chain from its last image. The
+  // run keeps its id, so archiving it again replaces its history entry rather
+  // than leaving a shorter copy behind, and it goes back to being the run a
+  // reload recovers.
+  const continueRun = useCallback(() => {
+    const current = runRef.current;
+    if (!current || current.origin === 'live') return;
+    const meta = { ...current, origin: 'live', finishedAt: null };
+    runRef.current = meta;
+    setRun(meta);
+  }, []);
+
   // Open a finished run: show its items again and refresh them, so anything
   // that moved on since it was archived comes back with its current state.
   //
@@ -282,8 +337,14 @@ export function useGenerationRun({
     [archive, refreshRun, storage]
   );
 
+  // Clearing history drops the cached files of those runs with it — a run that
+  // is gone from the list has no way back to its results, so keeping megabytes
+  // of them would just be litter. (A run pushed off the end of the capped list
+  // keeps its files until the cache evicts them by age.)
   const clearHistory = useCallback(() => {
+    const gone = storage.loadHistory().map((r) => `${storage.namespace}/${r.id}`);
     storage.clearHistory();
+    forgetRuns(gone);
     setHistory([]);
     setHistoryOpen(false);
   }, [storage]);
@@ -301,6 +362,8 @@ export function useGenerationRun({
     setItems,
     updateItem,
     appendItems,
+    removeItem,
+    outputKey,
     run,
     counts,
     hasActive,
@@ -308,6 +371,7 @@ export function useGenerationRun({
     history,
     startRun,
     finishRun: requestFinish,
+    continueRun,
     viewingHistory: run?.origin === 'history',
     openHistory: () => setHistoryOpen(true),
     historyModal: {

@@ -100,6 +100,14 @@ export function createToolStorage(namespace) {
     clearCurrentRun();
   }
 
+  // Drop a run from the history list. Used when a run loses its last item and
+  // so has nothing left to show.
+  function removeHistoryRun(id) {
+    const history = loadHistory();
+    const remaining = history.filter((r) => r.id !== id);
+    if (remaining.length !== history.length) saveHistory(remaining);
+  }
+
   // Write back a run that is already in history — its statuses were refreshed.
   function updateHistoryRun(run) {
     const normalized = normalizeRun(run);
@@ -140,6 +148,9 @@ export function createToolStorage(namespace) {
   }
 
   return {
+    // The tool this storage belongs to. The output cache keys by it too, so a
+    // run's cached files can be found without a second name for the same tool.
+    namespace,
     loadKey,
     saveKey,
     loadCurrentRun,
@@ -148,6 +159,7 @@ export function createToolStorage(namespace) {
     archiveRun,
     loadHistory,
     saveHistory,
+    removeHistoryRun,
     updateHistoryRun,
     clearHistory,
   };
