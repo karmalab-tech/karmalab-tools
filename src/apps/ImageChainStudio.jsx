@@ -80,7 +80,7 @@ const savedAspect = (modelKey) => {
 // A mini-button that is unavailable while the chain is generating.
 const MINI_BTN_ACTION = `${MINI_BTN} disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:border-panel-border disabled:hover:text-text-dim`;
 
-function StepCard({ step, busy, onRetry }) {
+function StepCard({ step, busy, onRetry, onDelete }) {
   const [downloading, setDownloading] = useState(false);
   const { index, label, status, outputUrl, error, from } = step;
 
@@ -135,7 +135,18 @@ function StepCard({ step, busy, onRetry }) {
                   : 'Generate this step again from the same image'
               }
             >
-              Retry this step
+              Retry
+            </button>
+            <button
+              type="button"
+              className={`${MINI_BTN_ACTION} hover:border-error hover:text-error`}
+              onClick={() => onDelete(step)}
+              disabled={busy}
+              title={
+                busy ? 'Wait for the current step to finish' : 'Remove this step from the chain'
+              }
+            >
+              Delete
             </button>
           </div>
         )}
@@ -388,6 +399,15 @@ export default function ImageChainStudio() {
     );
   }
 
+  // Delete a step that failed. Only a failed one is offered: it has no image to
+  // lose, and taking it off the end clears the way for the next batch — which
+  // starts from the last step that did produce an image either way.
+  function deleteStep(step) {
+    if (busy) return;
+    gen.removeItem(step.id);
+    setRunHint({ text: `${step.label || stepLabel(step.index ?? 0)} deleted.`, isError: false });
+  }
+
   function cancel() {
     cancelRef.current = true;
     setRunHint({ text: 'Cancelling — finishing the current request…', isError: false });
@@ -614,7 +634,13 @@ export default function ImageChainStudio() {
           ) : (
             <div className="grid grid-cols-[repeat(auto-fill,minmax(230px,1fr))] gap-3.5 mt-1">
               {steps.map((s) => (
-                <StepCard key={s.id} step={s} busy={busy} onRetry={retryStep} />
+                <StepCard
+                  key={s.id}
+                  step={s}
+                  busy={busy}
+                  onRetry={retryStep}
+                  onDelete={deleteStep}
+                />
               ))}
             </div>
           )}

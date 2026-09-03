@@ -13,8 +13,9 @@ that also proxies the Replicate API.
   flagship tool.
 - **Image Chain Studio** (`/image-chain`) — chains images: each step is
   generated from the previous step's image as its reference. Run it again and it
-  adds more steps to the same chain, continuing from its last image; a step that
-  failed is retried in place from its own card.
+  adds more steps to the same chain, always continuing from the last step that
+  produced an image; a step that failed is retried in place, or deleted, from
+  its own card.
 - **Batch Video Studio** (`/batch-videos`) — a batch of videos: one per prompt
   line, or one per uploaded start frame. Both modes flatten to one list of run
   items in `src/apps/batchVideo/items.js`.
@@ -134,7 +135,11 @@ fresh one at the same number, handed the newest image _before_ it
 (`chainSource(items, index)`), so a failure anywhere in the chain — the first
 step included — is recoverable without starting over. Each step records the
 label of the step it came from (`from`, persisted) rather than deriving it, so
-retrying one step never rewrites what another card says it used.
+retrying one step never rewrites what another card says it used. A failed step
+can also be deleted (`removeItem()` on the hook); losing a run's last item
+clears it from storage — `clearCurrentRun()`, or `removeHistoryRun()` once it
+has been archived — so an empty run is not recovered on the next load or left
+sitting in the history list.
 (The video chain cannot: its link is an extracted frame that only exists in the
 tab that made it. Replicate's result URLs do expire, so continuing a chain from
 much later fails at the model rather than in the UI.)
@@ -170,7 +175,8 @@ gone there.
 the modules touch (`localStorage`, `fetch`). Covered: the proxy's request policy,
 the prediction polling loop, per-model input assembly for images and video, the
 run model (what is persisted, a run's progress, the tab title), namespaced
-storage with its current-run / history persistence and the legacy migration, the
+storage with its current-run / history persistence, removing a run from history
+and the legacy migration, the
 Batch Video run-item flattening including its download filename stems, and the
 Image Chain step model (the step a chain continues from or a retry goes back to,
 its numbering, the step count parsing and the download filename stems).
@@ -192,7 +198,10 @@ image, with each step's request carrying the previous step's output URL. The
 per-step retry was checked the same way, against a stub that fails on demand: a
 failed first step retried in place, a mid-chain failure retried with the image
 before it rather than a later one, and no extra cards or history entries left
-behind.
+behind, a failed step deleted from a chain (persisted, with the surviving steps
+keeping their numbers and the next batch still starting from the last image),
+and deleting a run's last step clearing it from storage instead of leaving an
+empty run to recover.
 
 `src/apps/video/frames.js` has **no** automated coverage — jsdom can't decode
 video, so a test there would assert nothing meaningful; it wants a Playwright

@@ -408,6 +408,19 @@ describe('run history', () => {
     expect(history[0].title).toBe('second');
   });
 
+  it('removes a run from the list', () => {
+    storage.archiveRun(run({ id: 'run-1' }));
+    storage.archiveRun(run({ id: 'run-2' }));
+    storage.removeHistoryRun('run-1');
+    expect(storage.loadHistory().map((r) => r.id)).toEqual(['run-2']);
+  });
+
+  it('leaves the list alone when removing a run that is not in it', () => {
+    storage.archiveRun(run({ id: 'run-1' }));
+    storage.removeHistoryRun('run-nope');
+    expect(storage.loadHistory().map((r) => r.id)).toEqual(['run-1']);
+  });
+
   it('caps the list so it cannot grow without bound', () => {
     for (let i = 0; i < HISTORY_LIMIT + 5; i++) storage.archiveRun(run({ id: `run-${i}` }));
     const history = storage.loadHistory();

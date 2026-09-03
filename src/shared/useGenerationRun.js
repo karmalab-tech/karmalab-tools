@@ -19,6 +19,7 @@ import { useUnloadGuard } from './useUnloadGuard.js';
 //   gen.updateItem(id, patch);        // as each prediction progresses
 //   gen.finishRun();                  // the runner is done
 //   gen.continueRun();                // reopen the finished run to add to it
+//   gen.removeItem(id);               // drop one item from the run
 //
 // Options:
 //   storage       — a createToolStorage(namespace) instance (one per tool)
@@ -74,6 +75,26 @@ export function useGenerationRun({
   const appendItems = useCallback((newItems) => {
     setItems((prev) => [...prev, ...newItems]);
   }, []);
+
+  // Drop one item from the run on screen — the Image Chain Studio deleting a
+  // step that failed. Taking the last one leaves no run at all, so it is
+  // cleared from storage as well; otherwise the empty run would come back on
+  // the next load, or sit in the history list with nothing in it.
+  const removeItem = useCallback(
+    (id) => {
+      const remaining = itemsRef.current.filter((it) => it.id !== id);
+      if (!remaining.length) {
+        const current = runRef.current;
+        if (current?.origin === 'history') storage.removeHistoryRun(current.id);
+        else if (current) storage.clearCurrentRun();
+        runRef.current = null;
+        setRun(null);
+      }
+      itemsRef.current = remaining;
+      setItems(remaining);
+    },
+    [storage]
+  );
 
   // Persist on every change. A live run is the one to recover on reload; a run
   // opened from history is written back in place, since refreshing it can move
@@ -315,6 +336,7 @@ export function useGenerationRun({
     setItems,
     updateItem,
     appendItems,
+    removeItem,
     run,
     counts,
     hasActive,
