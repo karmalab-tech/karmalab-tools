@@ -20,6 +20,14 @@ import {
   sourceLabel,
   stepId,
 } from '../src/apps/imageChain/chain.js';
+import {
+  DEFAULT_MS_PER_IMAGE,
+  MAX_MS_PER_IMAGE,
+  MIN_MS_PER_IMAGE,
+  frameSequence,
+  parseDurationMs,
+  totalDurationMs,
+} from '../src/apps/imageChain/video.js';
 
 const base = { promptText: 'a cat', suffix: '', aspect: '1:1', extraValues: {} };
 
@@ -795,5 +803,52 @@ describe('a step download name', () => {
 
   it('falls back to the index when a recovered step has no basename', () => {
     expect(imageName({ index: 4 })).toBe('image-05.png');
+  });
+});
+
+// Stitching a chain into one video. Only the parts that are arithmetic are
+// covered — the encoding itself drives WebCodecs and a canvas, which the node
+// test environment has none of, so it is verified in a real browser instead.
+describe('the video frame order', () => {
+  it('is the chain, in order', () => {
+    expect(frameSequence(4, false)).toEqual([0, 1, 2, 3]);
+  });
+
+  it('comes back down the chain when looping, without repeating either end', () => {
+    // 1,2,3,4,3,2 — the player's own loop supplies the return to image 1, so it
+    // is not held twice at the seam.
+    expect(frameSequence(4, true)).toEqual([0, 1, 2, 3, 2, 1]);
+  });
+
+  it('has nothing to loop through with fewer than three images', () => {
+    expect(frameSequence(2, true)).toEqual([0, 1]);
+    expect(frameSequence(1, true)).toEqual([0]);
+    expect(frameSequence(0, true)).toEqual([]);
+  });
+
+  it('gives a looped video very nearly twice the length', () => {
+    expect(totalDurationMs(4, 200, false)).toBe(800);
+    expect(totalDurationMs(4, 200, true)).toBe(1200);
+    expect(totalDurationMs(1, 200, false)).toBe(200);
+  });
+});
+
+describe('parseDurationMs', () => {
+  it('reads a whole number of milliseconds', () => {
+    expect(parseDurationMs('200')).toBe(200);
+    expect(parseDurationMs(' 40 ')).toBe(40);
+    expect(parseDurationMs(String(DEFAULT_MS_PER_IMAGE))).toBe(DEFAULT_MS_PER_IMAGE);
+  });
+
+  it('caps a very long hold', () => {
+    expect(parseDurationMs('999999')).toBe(MAX_MS_PER_IMAGE);
+  });
+
+  it('rejects anything under a frame or not a number', () => {
+    expect(parseDurationMs(String(MIN_MS_PER_IMAGE - 1))).toBeNull();
+    expect(parseDurationMs('0')).toBeNull();
+    expect(parseDurationMs('-100')).toBeNull();
+    expect(parseDurationMs('')).toBeNull();
+    expect(parseDurationMs('soon')).toBeNull();
   });
 });

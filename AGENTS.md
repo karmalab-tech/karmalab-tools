@@ -15,7 +15,8 @@ that also proxies the Replicate API.
   generated from the previous step's image as its reference. Run it again and it
   adds more steps to the same chain, always continuing from the last step that
   produced an image; a step that failed is retried in place, or deleted, from
-  its own card.
+  its own card. The finished chain downloads as the images in a zip, or as one
+  video with each image held for a set number of milliseconds.
 - **Batch Video Studio** (`/batch-videos`) — a batch of videos: one per prompt
   line, or one per uploaded start frame. Both modes flatten to one list of run
   items in `src/apps/batchVideo/items.js`.
@@ -75,7 +76,8 @@ HTML.
 - `index.html` / `image-chain.html` / `batch-videos.html` / `video-chain.html` /
   `prompt.html` — Vite HTML entries, each loading a script from `src/entries/`.
 - `src/apps/` — the tools. Per-tool logic in `src/apps/batch/` (`storage.js`),
-  `src/apps/imageChain/` (`chain.js` — the step model, `storage.js`),
+  `src/apps/imageChain/` (`chain.js` — the step model, `video.js` — stitching the
+  chain into one video, `DownloadModal.jsx`, `storage.js`),
   `src/apps/batchVideo/` (`items.js`, `storage.js`) and `src/apps/video/`
   (`frames.js` — end-frame extraction via off-screen `<video>` + canvas).
 - `src/shared/` — what the tools are built from: `theme.css` (the Tailwind
@@ -144,6 +146,33 @@ sitting in the history list.
 tab that made it. Replicate's result URLs do expire, so continuing a chain from
 much later fails at the model rather than in the UI.)
 
+## Stitching a chain into a video
+
+`src/apps/imageChain/video.js` turns a finished image chain into one video, in
+the browser: each image is drawn on a canvas, held for the chosen number of
+milliseconds, encoded with **WebCodecs** and muxed by `mp4-muxer` or
+`webm-muxer` (both imported on demand, like JSZip, so nothing loads until the
+download modal asks for it). No upload, no ffmpeg-sized dependency, same trust
+model as the rest of the app.
+
+Three things there are less obvious than they look:
+
+- **The format is not a given.** H.264 in MP4 is what every player takes, but a
+  Chromium built without proprietary codecs (and Firefox) has WebCodecs and no
+  H.264 encoder at all, so the encoding is chosen by asking
+  `VideoEncoder.isConfigSupported` down a list — H.264 first, then VP9 and VP8
+  in WebM — and the file is named after what came back. The H.264 candidates
+  differ only in profile/level because a level caps the frame size it accepts
+  (baseline 3.1 is already too small for a 1024×1024 image).
+- **WebM needs a marker frame at the end.** `webm-muxer` takes the segment
+  duration from the last block's timestamp and ignores its `BlockDuration`, so
+  without one repeat of the final image, timed one hold later, the file claims
+  to be a frame short and players cut the last image off. `mp4-muxer` adds the
+  last sample's own duration, so the MP4 path must _not_ do this.
+- **Looping stops one short.** The frame order for a loop is the chain forwards
+  then back down it, ending on the second image: the player's own loop supplies
+  the return to the first, so it doesn't sit on a doubled frame at the seam.
+
 ## What the proxy allows, and why
 
 `api.replicate.com` sends no CORS headers, so the proxy is what makes any call
@@ -179,7 +208,9 @@ storage with its current-run / history persistence, removing a run from history
 and the legacy migration, the
 Batch Video run-item flattening including its download filename stems, and the
 Image Chain step model (the step a chain continues from or a retry goes back to,
-its numbering, the step count parsing and the download filename stems).
+its numbering, the step count parsing and the download filename stems) and its
+video arithmetic (the frame order with and without a loop, the resulting length,
+the duration parsing).
 
 `useGenerationRun` has no unit coverage — it is a hook over `localStorage`,
 `document.title` and `beforeunload`, and the node test environment has none of
@@ -201,11 +232,18 @@ before it rather than a later one, and no extra cards or history entries left
 behind, a failed step deleted from a chain (persisted, with the surviving steps
 keeping their numbers and the next batch still starting from the last image),
 and deleting a run's last step clearing it from storage instead of leaving an
-empty run to recover.
+empty run to recover. The video was checked the same way, by building one and
+reading the duration back out of the container: four images at 120ms produce a
+480ms file, the same chain looped produces 720ms (six frames), and the download
+is named after the container it turned out to be. That Chromium has no H.264
+encoder, so it exercised the WebM path; the MP4 path's timing was checked
+separately against `mp4-muxer` directly (four 120ms samples → a 480ms file),
+and a real H.264 encode still wants a look on a browser that has one.
 
-`src/apps/video/frames.js` has **no** automated coverage — jsdom can't decode
-video, so a test there would assert nothing meaningful; it wants a Playwright
-test. It's the subtlest code in the repo, so changes need manual verification in
+`src/apps/video/frames.js` and `src/apps/imageChain/video.js` have **no**
+automated coverage of the media parts — jsdom can't decode video and the node
+environment has no WebCodecs, so a test there would assert nothing meaningful;
+they want a Playwright test. It's the subtlest code in the repo, so changes need manual verification in
 a real browser, and say so rather than implying tests cover it.
 
 One ESLint choice worth knowing: `eslint.config.js` enables

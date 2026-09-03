@@ -21,7 +21,7 @@ import {
   SELECT_CHEVRON,
 } from '../shared/fields.js';
 import { loadApiKey, loadOpenaiKey } from '../shared/apiKey.js';
-import { downloadUrl, downloadZip } from '../shared/download.js';
+import { downloadUrl, downloadZip, triggerDownload } from '../shared/download.js';
 import { useGenerationRun } from '../shared/useGenerationRun.js';
 import {
   CHAIN_MODEL_KEYS,
@@ -47,6 +47,8 @@ import {
   stepId,
   stepLabel,
 } from './imageChain/chain.js';
+import { DownloadModal } from './imageChain/DownloadModal.jsx';
+import { buildChainVideo } from './imageChain/video.js';
 import { loadKey, saveKey, storage } from './imageChain/storage.js';
 
 const needsOpenaiKey = (cfg) => (cfg.extraFields || []).some((f) => f.type === 'apiKey');
@@ -169,7 +171,7 @@ export default function ImageChainStudio() {
   const [stepsText, setStepsText] = useState('4');
   const [isRunning, setIsRunning] = useState(false);
   const [runHint, setRunHint] = useState({ text: '', isError: false });
-  const [downloadLabel, setDownloadLabel] = useState('Download all (.zip)');
+  const [downloadOpen, setDownloadOpen] = useState(false);
 
   const cancelRef = useRef(false);
   const promptTouchedRef = useRef(false);
@@ -339,7 +341,6 @@ export default function ImageChainStudio() {
 
     // A new chain replaces the one on screen, which moves to the history list.
     gen.startRun({ title: chainTitle(cfg.label), items: [] });
-    setDownloadLabel('Download all (.zip)');
     setRunHint({ text: '', isError: false });
     cancelRef.current = false;
     setIsRunning(true);
@@ -354,7 +355,6 @@ export default function ImageChainStudio() {
     const key = checkedKey();
     if (!key) return;
 
-    setDownloadLabel('Download all (.zip)');
     setRunHint({ text: '', isError: false });
     cancelRef.current = false;
     setIsRunning(true);
@@ -377,7 +377,6 @@ export default function ImageChainStudio() {
     const reference = before ? before.outputUrl : firstReference?.dataUri || null;
     const fresh = newStep(index, sourceLabel(before));
 
-    setDownloadLabel('Download all (.zip)');
     setRunHint({ text: '', isError: false });
     cancelRef.current = false;
     setIsRunning(true);
@@ -413,17 +412,25 @@ export default function ImageChainStudio() {
     setRunHint({ text: 'Cancelling — finishing the current request…', isError: false });
   }
 
-  async function downloadAll() {
-    setDownloadLabel('Zipping…');
-    try {
-      await downloadZip(
-        'karmalab-image-chain.zip',
-        succeeded.map((s) => ({ name: imageName(s), url: s.outputUrl }))
-      );
-    } catch (e) {
-      alert('Could not build the zip file: ' + e.message);
-    }
-    setDownloadLabel('Download all (.zip)');
+  function downloadImages() {
+    return downloadZip(
+      'karmalab-image-chain.zip',
+      succeeded.map((s) => ({ name: imageName(s), url: s.outputUrl }))
+    );
+  }
+
+  // Stitch the chain into one video: every image held for the same moment, in
+  // chain order. Built here in the browser (src/apps/imageChain/video.js).
+  async function downloadVideo({ msPerImage, loop, onProgress }) {
+    const { blob, extension } = await buildChainVideo({
+      urls: succeeded.map((s) => s.outputUrl),
+      msPerImage,
+      loop,
+      onProgress,
+    });
+    const url = URL.createObjectURL(blob);
+    triggerDownload(url, `karmalab-image-chain-${msPerImage}ms${loop ? '-loop' : ''}.${extension}`);
+    URL.revokeObjectURL(url);
   }
 
   const stepsLabel = `${stepCount || 0} ${stepCount === 1 ? 'step' : 'steps'}`;
@@ -619,10 +626,10 @@ export default function ImageChainStudio() {
             succeeded.length > 0 ? (
               <Button
                 variant="secondary"
-                onClick={downloadAll}
+                onClick={() => setDownloadOpen(true)}
                 style={{ padding: '8px 16px', fontSize: 13 }}
               >
-                {downloadLabel}
+                Download…
               </Button>
             ) : null
           }
@@ -653,6 +660,13 @@ export default function ImageChainStudio() {
         onClose={() => setKeyModalOpen(false)}
       />
       <RunHistoryModal {...gen.historyModal} />
+      <DownloadModal
+        open={downloadOpen}
+        imageCount={succeeded.length}
+        onClose={() => setDownloadOpen(false)}
+        onDownloadVideo={downloadVideo}
+        onDownloadZip={downloadImages}
+      />
     </div>
   );
 }
