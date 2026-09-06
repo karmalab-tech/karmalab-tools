@@ -1,14 +1,17 @@
 # fly.io configuration for KarmaLab Tools.
 #
-# `app` below is a placeholder: app names are globally unique on fly.io, so this
-# file cannot name a real app that a fork could deploy to. Run `fly launch` once
-# to create your own app and have it rewrite this line, or set the name yourself
-# and deploy with `fly deploy`.
+# Deploys automatically via .github/workflows/deploy.yml on push to main,
+# using a deploy token stored as the FLY_API_TOKEN repo secret. The `app`
+# name itself isn't set here — the workflow passes it via `flyctl deploy
+# --app`, sourced from the FLY_APP_NAME repo secret, so it doesn't appear in
+# repo code. To deploy locally, pass it yourself: `fly deploy --app <name>`.
+#
+# A fork needs its own fly.io app: run `fly apps create`, then set its own
+# FLY_API_TOKEN (`fly tokens create deploy`) and FLY_APP_NAME secrets.
 #
 # See https://fly.io/docs/reference/configuration/ for the full reference.
-# 
+#
 
-app = 'karmalab-tools'
 primary_region = 'cdg'
 
 [build]
