@@ -136,9 +136,12 @@ instead of accepting one from the browser. Found a hole? See
 ## Deploying
 
 There's a `Dockerfile` (multi-stage: build, then run the server) and a `fly.toml`
-for [fly.io](https://fly.io). The `app` name in `fly.toml` is a placeholder —
-fly.io app names are globally unique, so run `fly launch` to create your own
-first. Any host that can run a Node container works; the runtime needs no
+for [fly.io](https://fly.io). `.github/workflows/deploy.yml` deploys the app in
+`fly.toml` on every push to `main`, authenticated with a `FLY_API_TOKEN` repo
+secret (a deploy token scoped to that app — see `fly tokens create deploy`). A
+fork needs its own app: change the `app` name in `fly.toml` (fly.io app names
+are globally unique), run `fly apps create`, and set your own `FLY_API_TOKEN`
+secret. Any host that can run a Node container works; the runtime needs no
 `node_modules`, since the server uses only Node core modules. Set `PORT` to
 choose the port (`fly.toml` uses 8080).
 
