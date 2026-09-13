@@ -86,11 +86,14 @@ it stopped (until those links expire).
   Both video tools share a model catalogue: Veo 3.1 and 3.1 Fast, Kling v3,
   Seedance 2.0, Hailuo 2.3 Fast, Wan 2.7 i2v.
 - **Chat Box Studio** (`/prompt`) — the one tool that asks nothing of Replicate.
-  It records the chat box typing a message and sending it, as a video file at
-  whatever resolution a reel or a post wants: set the frame, the message, the
-  typing speed and the pauses, drop images on the box to attach them, and every
-  frame is painted on a canvas at full resolution and encoded in the browser
-  (WebCodecs — Chrome or Edge). Not in the tools sidebar; it lives at its URL.
+  It records the chat box being used, as a video file at whatever resolution a
+  reel or a post wants: images dropping into the box one by one, the message
+  typed at a human speed, the pause, the send. Set the frame, the title above
+  the box, the placeholder, the speed and every pause; add a typing sound and it
+  is heard only while characters are landing, playing through your clip instead
+  of repeating the same second of it. Every frame is painted on a canvas at full
+  resolution and encoded in the browser (WebCodecs — Chrome or Edge). Not in the
+  tools sidebar; it lives at its URL.
 
 ## Running it locally
 

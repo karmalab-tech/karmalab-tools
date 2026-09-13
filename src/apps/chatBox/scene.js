@@ -183,18 +183,33 @@ export function textLines(ctx, scene, text) {
   return lines.slice(-METRICS.maxTextLines);
 }
 
-export function boxHeight(ctx, scene, text) {
+// How many thumbnails fit across the box, and how tall the strip of them is.
+// The DOM box wraps its attachments; so does this, or a tenth image would
+// quietly fall off the edge of the recording.
+export const thumbsPerRow = (scene) =>
+  Math.max(1, Math.floor((scene.innerW + scene.m.thumbGap) / (scene.m.thumb + scene.m.thumbGap)));
+
+export function stripHeight(scene, count) {
+  if (count <= 0) return 0;
+  const rows = Math.ceil(count / thumbsPerRow(scene));
+  return rows * scene.m.thumb + (rows - 1) * scene.m.thumbGap + scene.m.gap;
+}
+
+export function boxHeight(ctx, scene, text, attachCount = scene.attachments.length) {
   const { m } = scene;
   const lines = textLines(ctx, scene, text);
   const textH = Math.max(m.minTextHeight, lines.length * m.lineHeight);
-  const strip = scene.attachments.length ? m.thumb + m.gap : 0;
-  return m.padTop + strip + textH + m.gap + m.control + m.padBottom;
+  return m.padTop + stripHeight(scene, attachCount) + textH + m.gap + m.control + m.padBottom;
 }
 
 // One frame. `state` is what timeline.js says the box looks like right now:
-// { text, caretOn, sending }.
+// { text, caretOn, sending, attachCount, dropProgress }.
 export function paintFrame(ctx, scene, state) {
   const { m, width, height, boxX, boxW } = scene;
+  const attachCount =
+    state.attachCount === undefined ? scene.attachments.length : state.attachCount;
+  // 0 while an image is still landing, 1 once it has settled.
+  const landed = state.dropProgress === undefined ? 1 : state.dropProgress;
 
   ctx.save();
   ctx.fillStyle = scene.background;
@@ -208,7 +223,7 @@ export function paintFrame(ctx, scene, state) {
     ctx.fillText(scene.headline, width / 2, scene.headlineTop + scene.headlineH / 2);
   }
 
-  const boxH = boxHeight(ctx, scene, state.text);
+  const boxH = boxHeight(ctx, scene, state.text, attachCount);
   const boxY = scene.boxBottom - boxH;
 
   // The panel: fill with the shadow the DOM box wears, then the border on top
@@ -226,19 +241,31 @@ export function paintFrame(ctx, scene, state) {
   roundRect(ctx, boxX, boxY, boxW, boxH, m.radius);
   ctx.stroke();
 
+  // The box lights up as an image lands on it, the way it does under a real
+  // drag, and fades back over the landing.
+  if (landed < 1 && attachCount > 0) {
+    ctx.save();
+    ctx.globalAlpha = 1 - landed;
+    ctx.strokeStyle = COLORS.accent;
+    ctx.lineWidth = Math.max(1.5, scene.scale * 1.5);
+    roundRect(ctx, boxX, boxY, boxW, boxH, m.radius);
+    ctx.stroke();
+    ctx.restore();
+  }
+
   const contentX = boxX + m.padLeft;
   let y = boxY + m.padTop;
 
-  if (scene.attachments.length) {
-    let x = contentX;
-    for (const image of scene.attachments) {
-      drawThumb(ctx, image, x, y, m.thumb, m.thumbRadius, scene.scale);
-      x += m.thumb + m.thumbGap;
-      // The strip is one row: anything past the box's width is not drawn, which
-      // is what the DOM box would do at its second row.
-      if (x + m.thumb > boxX + boxW - m.padRight) break;
-    }
-    y += m.thumb + m.gap;
+  if (attachCount > 0) {
+    const perRow = thumbsPerRow(scene);
+    scene.attachments.slice(0, attachCount).forEach((image, i) => {
+      const x = contentX + (i % perRow) * (m.thumb + m.thumbGap);
+      const row = Math.floor(i / perRow) * (m.thumb + m.thumbGap);
+      // The newest one scales and fades into place; the rest are settled.
+      const progress = i === attachCount - 1 ? landed : 1;
+      drawThumb(ctx, image, x, y + row, m.thumb, m.thumbRadius, scene.scale, progress);
+    });
+    y += stripHeight(scene, attachCount);
   }
 
   // The message (or the placeholder), plus the caret at the end of it.
@@ -268,14 +295,26 @@ export function paintFrame(ctx, scene, state) {
 
   y += textH + m.gap;
 
-  drawAttachButton(ctx, scene, contentX, y);
-  drawModelChip(ctx, scene, contentX + attachButtonWidth(ctx, scene) + m.chipGap, y);
-  drawSendButton(ctx, scene, boxX + boxW - m.padRight - m.control, y, state);
+  drawAttachButton(ctx, scene, contentX, y, attachCount);
+  drawModelChip(ctx, scene, contentX + attachButtonWidth(ctx, scene, attachCount) + m.chipGap, y);
+  drawSendButton(ctx, scene, boxX + boxW - m.padRight - m.control, y, state, attachCount);
 
   ctx.restore();
 }
 
-function drawThumb(ctx, image, x, y, size, radius, scale) {
+// One attachment. `progress` is its landing: below 1 it is drawn slightly
+// small and see-through, about its own centre, so it settles into the strip
+// instead of appearing from nowhere.
+function drawThumb(ctx, image, x, y, size, radius, scale, progress = 1) {
+  const eased = progress >= 1 ? 1 : 1 - (1 - progress) * (1 - progress);
+  ctx.save();
+  if (eased < 1) {
+    const grow = 0.86 + 0.14 * eased;
+    ctx.globalAlpha = eased;
+    ctx.translate(x + size / 2, y + size / 2);
+    ctx.scale(grow, grow);
+    ctx.translate(-(x + size / 2), -(y + size / 2));
+  }
   ctx.save();
   roundRect(ctx, x, y, size, size, radius);
   ctx.fillStyle = COLORS.thumbBg;
@@ -291,16 +330,17 @@ function drawThumb(ctx, image, x, y, size, radius, scale) {
   ctx.lineWidth = Math.max(1, scale);
   roundRect(ctx, x, y, size, size, radius);
   ctx.stroke();
+  ctx.restore();
 }
 
 // The attach button is a 34px circle-ish pill with a paperclip in it, and turns
 // into a wider pill with a count once something is attached — the DOM box's
 // `active` pill.
-function attachButtonWidth(ctx, scene) {
+function attachButtonWidth(ctx, scene, attachCount) {
   const { m } = scene;
-  if (!scene.attachments.length) return m.control;
+  if (!attachCount) return m.control;
   ctx.font = scene.fontChip;
-  const count = String(scene.attachments.length);
+  const count = String(attachCount);
   return (
     10 * scene.scale +
     m.iconSize +
@@ -310,10 +350,10 @@ function attachButtonWidth(ctx, scene) {
   );
 }
 
-function drawAttachButton(ctx, scene, x, y) {
+function drawAttachButton(ctx, scene, x, y, attachCount) {
   const { m } = scene;
-  const w = attachButtonWidth(ctx, scene);
-  const active = scene.attachments.length > 0;
+  const w = attachButtonWidth(ctx, scene, attachCount);
+  const active = attachCount > 0;
 
   if (active) {
     ctx.fillStyle = COLORS.accentDim;
@@ -342,11 +382,7 @@ function drawAttachButton(ctx, scene, x, y) {
     ctx.fillStyle = color;
     ctx.textAlign = 'left';
     ctx.textBaseline = 'middle';
-    ctx.fillText(
-      String(scene.attachments.length),
-      iconX + m.iconSize + 7 * scene.scale,
-      y + m.control / 2
-    );
+    ctx.fillText(String(attachCount), iconX + m.iconSize + 7 * scene.scale, y + m.control / 2);
   }
 }
 
@@ -380,9 +416,9 @@ function drawModelChip(ctx, scene, x, y) {
 
 // The send button: accent once there is something to send, and a spinner from
 // the moment it is pressed — the same two states the DOM button has.
-function drawSendButton(ctx, scene, x, y, state) {
+function drawSendButton(ctx, scene, x, y, state, attachCount) {
   const { m } = scene;
-  const live = state.text.trim().length > 0 || scene.attachments.length > 0;
+  const live = state.text.trim().length > 0 || attachCount > 0;
   ctx.fillStyle = live ? COLORS.accent : COLORS.sendOffBg;
   ctx.beginPath();
   ctx.arc(x + m.control / 2, y + m.control / 2, m.control / 2, 0, Math.PI * 2);

@@ -7,21 +7,28 @@
 // the text in it is as crisp as the resolution allows.
 //
 // timeline.js decides what the box looks like at each moment; this walks the
-// frames, paints them and muxes the result. No automated coverage — node has no
-// canvas and no WebCodecs — so the arithmetic lives in timeline.js and scene.js
-// where it can be tested, and the picture is checked by watching it.
+// frames, paints them and muxes the result. A typing sound, if one was given,
+// is cut to the same timeline by audio.js and muxed as a second track. No
+// automated coverage — node has no canvas and no WebCodecs — so the arithmetic
+// lives in timeline.js, scene.js and audio.js where it can be tested, and the
+// picture is checked by watching it.
 
 import {
+  AUDIO_SAMPLE_RATE,
   createMuxer,
   drainEncoder,
+  encodeAudioTrack,
   motionBitrate,
+  pickAudioEncoding,
   pickEncoding,
   videoSupport,
 } from '../../shared/videoEncode.js';
+import { typingTrack } from './audio.js';
 import { buildScene, ensureFonts, paintFrame } from './scene.js';
 import { stateAt } from './timeline.js';
 
 export { videoSupport };
+export { AUDIO_SAMPLE_RATE };
 
 // A keyframe every couple of seconds: enough for a player to scrub, few enough
 // that a nearly-still scene stays small.
@@ -42,8 +49,27 @@ async function decodeAttachments(attachments) {
   return images;
 }
 
+// Which container to record in. Normally whatever the browser encodes best
+// (H.264 in MP4 where it can), but a sound track has to be encoded too: a
+// browser with H.264 and no AAC would otherwise produce a silent MP4, so the
+// search is repeated over WebM, whose Opus every browser with an AudioEncoder
+// has. Returns the pair, and null audio when the sound has to be dropped.
+async function pickTracks(width, height, fps, bitrate, wantsAudio) {
+  const encoding = await pickEncoding(width, height, fps, bitrate);
+  if (!encoding) throw new Error('This browser has no video encoder for a frame this size.');
+  if (!wantsAudio) return { encoding, audio: null };
+
+  const audio = await pickAudioEncoding(encoding.container);
+  if (audio) return { encoding, audio };
+
+  const webm = await pickEncoding(width, height, fps, bitrate, { containers: ['webm'] });
+  const webmAudio = webm && (await pickAudioEncoding('webm'));
+  if (webm && webmAudio) return { encoding: webm, audio: webmAudio };
+  return { encoding, audio: null };
+}
+
 // Record the box. `plan` comes from planRecording(); the rest is what the box
-// looks like. Resolves to { blob, extension, label, durationMs }, or
+// looks like. Resolves to { blob, extension, label, durationMs, audio }, or
 // { cancelled: true } if `shouldStop` asked it to stop part-way.
 export async function recordChatBox({
   width,
@@ -54,6 +80,7 @@ export async function recordChatBox({
   placeholder,
   modelChip,
   attachments = [],
+  sound = null, // { samples, sampleRate } at AUDIO_SAMPLE_RATE, or null
   plan,
   onProgress = () => {},
   shouldStop = () => false,
@@ -81,11 +108,20 @@ export async function recordChatBox({
     finalText: plan.chars.join(''),
   });
 
-  const bitrate = motionBitrate(width, height, plan.fps);
-  const encoding = await pickEncoding(width, height, plan.fps, bitrate);
-  if (!encoding) throw new Error('This browser has no video encoder for a frame this size.');
+  // The sound is cut to the plan before anything is encoded, so a clip that is
+  // too short to cover the typing is known about up front.
+  const track = sound ? typingTrack(sound, plan, plan.totalMs) : null;
 
-  const muxer = await createMuxer(encoding, width, height, plan.fps);
+  const bitrate = motionBitrate(width, height, plan.fps);
+  const { encoding, audio } = await pickTracks(width, height, plan.fps, bitrate, !!track);
+
+  const muxer = await createMuxer(
+    encoding,
+    width,
+    height,
+    plan.fps,
+    audio ? { ...audio, sampleRate: track.sampleRate, numberOfChannels: 1 } : null
+  );
   let encodeError = null;
   const encoder = new VideoEncoder({
     output: (chunk, meta) => muxer.addVideoChunk(chunk, meta),
@@ -140,12 +176,22 @@ export async function recordChatBox({
 
   if (cancelled) return { cancelled: true };
 
+  // The sound goes in after the picture: each track's own chunks are in order,
+  // which is what both muxers ask for, and they interleave the two themselves.
+  if (audio && track) {
+    onProgress({ stage: 'sound', done: plan.frameCount, total: plan.frameCount });
+    await encodeAudioTrack(muxer, audio, track);
+  }
+
   muxer.finalize();
   onProgress({ stage: 'done', done: plan.frameCount, total: plan.frameCount });
   return {
     blob: new Blob([muxer.target.buffer], { type: `video/${encoding.container}` }),
     extension: encoding.container,
-    label: encoding.label,
+    label: [encoding.label, audio?.label].filter(Boolean).join(' + '),
     durationMs: plan.totalMs,
+    // What happened to the sound, for the studio to say so: missing when there
+    // was none, `dropped` when this browser could not encode it at all.
+    audio: track ? { played: !!audio, wrapped: track.wrapped, dropped: !audio } : null,
   };
 }

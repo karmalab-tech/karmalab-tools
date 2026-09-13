@@ -24,9 +24,11 @@ that also proxies the Replicate API.
   starts from the last frame of the previous one, extracted in-browser via canvas.
 - **Chat Box Studio** (`/prompt`) — the odd one out: it generates nothing on
   Replicate. It records the chat box (`src/apps/chatBox/ChatBox.jsx`, the styled
-  box this route used to be a mockup of) typing a message and sending it, as a
-  video file at whatever resolution a reel wants — every frame painted on a
-  canvas and encoded in the browser. Still not in the tools sidebar.
+  box this route used to be a mockup of) having images dropped into it and a
+  message typed and sent, as a video file at whatever resolution a reel wants —
+  every frame painted on a canvas and encoded in the browser, with the typing
+  sound (if one was given) cut to the same timeline. Still not in the tools
+  sidebar.
 
 ## Rules that matter here
 
@@ -98,8 +100,9 @@ HTML.
   (`frames.js` — end-frame extraction via off-screen `<video>` + canvas) and
   `src/apps/chatBox/` (`ChatBox.jsx` — the box itself, `design.js` — the numbers
   it is built from, `scene.js` — the same box painted on a canvas, `timeline.js`
-  — what it is doing at a given millisecond, `record.js` — the frames encoded
-  into a file, `storage.js`).
+  — what it is doing at a given millisecond, `audio.js` — the typing sound cut
+  to that, `record.js` — the frames and the sound encoded into a file,
+  `sound.js` + `storage.js` — what is kept between visits).
 - `src/shared/` — what the tools are built from: `theme.css` (the Tailwind
   entry — `@theme` tokens, base styles, keyframes), `components/` (import from
   `src/shared/components`, which also pulls in `theme.css`), `tools.js` (the
@@ -112,7 +115,8 @@ HTML.
   current-run / run-history persistence, one prefix per tool), `apiKey.js`, `fields.js`,
   `useUnloadGuard.js`, `videoEncode.js` (the WebCodecs encoder plumbing the two
   tools that build a video locally share — which codec and container this
-  browser has, the muxer, the encode queue), plus the run machinery: `runs.js`
+  browser has, the muxer, the encode queue, and the audio track when there is
+  one), plus the run machinery: `runs.js`
   (the run/item model — what is persisted, a run's progress, the tab title),
   `useGenerationRun.js` (the hook every generation tool shares) and
   `download.js` (single-file and zip downloads).
@@ -188,7 +192,10 @@ outputs are now on disk locally, and the History modal says so.
 For the Chat Box Studio the cache is not an insurance policy but the only copy
 there is: its `outputUrl` is a blob URL, which dies with the tab that made it,
 so a recording reopened from History plays and downloads from IndexedDB or not
-at all.
+at all. Its typing sound lives in the same store, under
+`chatBoxStudio/assets/typingSound` (`src/apps/chatBox/sound.js`) — a clip is a
+file chosen once and wanted under every recording after that, and `assets` sits
+where a run id normally does, so clearing the history leaves it alone.
 
 - **The write happens in `useGenerationRun.updateItem`**, not in each tool: any
   patch carrying an `outputUrl` triggers the copy, so every tool got this at
@@ -260,7 +267,13 @@ Tailwind arbitrary values (Tailwind has to see the class strings) while
 — it is the real component in a frame the shape of the video, at the scale the
 recording uses, so the two are side by side the whole time.
 
-Two details worth knowing:
+A recording is five stretches of time, all of them in `timeline.js`: an empty
+box, the images landing in it one every `attachIntervalMs`, the message typed,
+a pause, the send. Images are not sitting in the box when the video opens —
+they drop in, one after another, and typing starts one interval after the last
+of them.
+
+Details worth knowing:
 
 - **The composition is settled against the finished message**, and the box is
   drawn from its bottom edge up. The controls row and the send button hold still
@@ -271,6 +284,29 @@ Two details worth knowing:
   back to a system font for a face the document hasn't loaded, so `ensureFonts()`
   waits on the ones in `FONT_SPECS`; without it the video ships in Arial and
   nothing says so.
+- **The attachment strip wraps**, like the DOM box's does (`thumbsPerRow`), so a
+  tenth image doesn't quietly fall off the edge of the frame.
+
+### The typing sound
+
+`audio.js` decides where a keyboard clip is heard, and it is the answer to three
+things at once. `typingRuns` is the stretches where characters are actually
+landing — merged when they run together, so continuous typing sounds continuous
+rather than gated per key, and cut at the send. `trackSegments` walks a cursor
+_forward_ through the clip, so no part of it is ever played twice; only a clip
+shorter than the typing wraps, and `wrapped` says so (the studio warns before
+recording, and the hint repeats it after). `renderTrack` lays those segments
+into silence with a short fade at each edge, because the clip is cut at
+arbitrary points and a hard edge is a click. All three are pure and unit-tested;
+only `decodeMono` needs a browser.
+
+The sound then costs the recorder a second track: `pickTracks` prefers whatever
+video encoding is best, but a browser with H.264 and no AAC would otherwise
+produce a silent MP4, so it looks again in WebM, whose Opus every browser with
+an `AudioEncoder` has. The picture is encoded first and the sound after — each
+track's own chunks in order, which is what both muxers ask for. The studio's
+"Play preview" builds the same track and plays it through Web Audio, so the
+preview is the file, ears included.
 
 ## What the proxy allows, and why
 
@@ -313,8 +349,14 @@ the duration parsing), and the Chat Box Studio's recording timeline (the four
 stretches it adds up to, that the typing keeps to the speed asked for and pauses
 at a full stop, that the same settings produce the same recording, that a
 character is never un-typed and the caret goes away at the send, the frame count
-the encoder is asked for, and the clamping of every settings box) with its frame
-arithmetic (an even resolution, the presets, the download's name and extension).
+the encoder is asked for, and the clamping of every settings box), its frame
+arithmetic (an even resolution, the presets, the download's name and extension),
+the images it drops in (when each lands, what that does to the typing, the send
+and the length, and how far the newest one is into landing) and its typing sound
+(that it is heard only while characters land and silent either side, that a
+burst is one run and a pause breaks it, that the cursor never replays a part of
+the clip, that a short clip wraps and says so, and that the track is silence
+with faded edges).
 
 `useGenerationRun` has no unit coverage — it is a hook over `localStorage`,
 `document.title` and `beforeunload`, and the node test environment has none of
@@ -355,7 +397,13 @@ the frames themselves were read back as PNGs at each phase (empty, typing with
 the caret at the end of the text, two lines with the spinner in the send button)
 to check the painting against the box on screen. The stage's anchoring was
 checked by measuring the box's bottom edge: settled and mid-preview, to the
-pixel. That Chromium has no H.264 encoder either, so what shipped there was
+pixel. The images and the sound were checked the same way: frames read back as
+PNGs at each landing (the box lit, the newest thumbnail mid-scale, the pill's
+count following it), and a recording with a clip under it decoded back out of
+the muxed file — 6.013s of Opus against a 6.0s video, silent before the typing
+(RMS 0) and after the send (RMS 0), audible in between. Driven from the UI, a
+clip taken through the file picker survived a reload from IndexedDB with its
+name, and the recording came out labelled `WebM · VP9 + Opus`. That Chromium has no H.264 encoder either, so what shipped there was
 WebM/VP9 — the MP4 path wants a look on a browser that has one. Google Fonts is
 not reachable from that sandbox, so the frames rendered in the fallback face:
 `ensureFonts()` itself is unverified, and worth a look on a machine with the

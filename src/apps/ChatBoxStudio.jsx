@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ApiKeyModal,
   Button,
+  ImagesDrop,
   Panel,
   RunHistoryModal,
   Spinner,
@@ -38,7 +39,9 @@ import {
   recordingBasename,
   resolutionLabel,
 } from './chatBox/scene.js';
-import { recordChatBox, videoSupport } from './chatBox/record.js';
+import { AUDIO_SAMPLE_RATE, recordChatBox, videoSupport } from './chatBox/record.js';
+import { decodeMono, neededMs, typingRuns, typingTrack } from './chatBox/audio.js';
+import { clearSound, loadSound, saveSound } from './chatBox/sound.js';
 import {
   DEFAULTS,
   LIMITS,
@@ -78,9 +81,12 @@ const SETTING_KEYS = [
   'modelChip',
   'cps',
   'startDelayMs',
+  'attachIntervalMs',
   'pauseBeforeSendMs',
   'waitAfterSendMs',
   'fps',
+  // Only the clip's name: the audio itself is in IndexedDB (chatBox/sound.js).
+  'soundName',
 ];
 
 const INITIAL = {
@@ -94,9 +100,11 @@ const INITIAL = {
   modelChip: DEFAULT_MODEL_CHIP,
   cps: String(DEFAULTS.cps),
   startDelayMs: String(DEFAULTS.startDelayMs),
+  attachIntervalMs: String(DEFAULTS.attachIntervalMs),
   pauseBeforeSendMs: String(DEFAULTS.pauseBeforeSendMs),
   waitAfterSendMs: String(DEFAULTS.waitAfterSendMs),
   fps: String(DEFAULTS.fps),
+  soundName: '',
 };
 
 const loadSettings = () =>
@@ -133,10 +141,97 @@ function NumberField({ id, label, value, onChange, help, min, max, step = 1, suf
   );
 }
 
+// Click-or-drop for the typing clip. The sibling of ImagesDrop, which does not
+// take audio — this is the same shape in the same clothes.
+function SoundDrop({ name, sound, disabled, onChoose, onRemove }) {
+  const [dragover, setDragover] = useState(false);
+  const inputRef = useRef(null);
+
+  const take = (fileList) => {
+    const file = Array.from(fileList || []).find((f) => f.type.startsWith('audio/'));
+    if (file) onChoose(file);
+  };
+
+  return (
+    <>
+      <div
+        className={[
+          'border-[1.5px] border-dashed border-panel-border rounded-[14px] p-4.5 flex items-center gap-3.5 cursor-pointer transition-[border-color,background] duration-150 bg-panel-alt hover:border-accent',
+          disabled && 'opacity-40 cursor-not-allowed pointer-events-none',
+          dragover && 'border-accent',
+          sound && 'border-solid',
+        ]
+          .filter(Boolean)
+          .join(' ')}
+        onClick={() => inputRef.current?.click()}
+        onDragOver={(e) => {
+          e.preventDefault();
+          setDragover(true);
+        }}
+        onDragLeave={(e) => {
+          e.preventDefault();
+          setDragover(false);
+        }}
+        onDrop={(e) => {
+          e.preventDefault();
+          setDragover(false);
+          take(e.dataTransfer.files);
+        }}
+      >
+        <div className="w-13 h-13 rounded-[10px] shrink-0 flex items-center justify-center text-text-dim border border-panel-border">
+          <svg
+            viewBox="0 0 24 24"
+            width="20"
+            height="20"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth={1.8}
+            strokeLinecap="round"
+          >
+            <path d="M3 12v2M7 8v10M11 5v14M15 9v7M19 11v3" />
+          </svg>
+        </div>
+        <div className="flex-1 min-w-0">
+          <div className="text-[14px] mb-0.5 truncate">
+            {sound ? name || 'Typing sound' : 'Click or drop a typing sound'}
+          </div>
+          <div className="text-[12px] text-text-dim font-mono truncate">
+            {sound ? `${(sound.durationMs / 1000).toFixed(1)}s of audio` : 'Any audio file'}
+          </div>
+        </div>
+      </div>
+
+      {sound && (
+        <div className="flex gap-1.5 mt-2">
+          <button
+            type="button"
+            className={`${MINI_BTN} hover:border-error hover:text-error`}
+            onClick={onRemove}
+            disabled={disabled}
+          >
+            Remove the sound
+          </button>
+        </div>
+      )}
+
+      <input
+        ref={inputRef}
+        type="file"
+        accept="audio/*"
+        className="hidden"
+        onChange={(e) => {
+          take(e.target.files);
+          e.target.value = '';
+        }}
+      />
+    </>
+  );
+}
+
 // The finished video, or why there isn't one. One recording is one run, so this
 // is the run — including a run opened from History, whose blob URL died with
 // the tab that made it and which plays from the output cache instead.
-function ResultPanel({ item, cacheKey, progress, recording }) {
+function ResultPanel({ item, cacheKey, progress, recording, hasSound }) {
   const [extension, setExtension] = useState('');
   const src = useCachedOutput(cacheKey, item?.outputUrl);
 
@@ -193,6 +288,13 @@ function ResultPanel({ item, cacheKey, progress, recording }) {
               Download
             </button>
           </div>
+          {/* Autoplay is only allowed muted, so a recording with a typing
+              sound in it is silent until someone asks for it. */}
+          {hasSound && (
+            <div className="font-mono text-[11px] text-text-dim text-center">
+              Unmute the player to hear the typing.
+            </div>
+          )}
         </>
       )}
 
@@ -207,7 +309,9 @@ function ResultPanel({ item, cacheKey, progress, recording }) {
           <div className="font-mono text-[11.5px] text-text-dim text-center">
             {progress.stage === 'preparing'
               ? 'Preparing the canvas…'
-              : `Recording frame ${progress.done} of ${progress.total} · ${pct}%`}
+              : progress.stage === 'sound'
+                ? 'Laying the typing sound under it…'
+                : `Recording frame ${progress.done} of ${progress.total} · ${pct}%`}
           </div>
         </div>
       )}
@@ -227,7 +331,8 @@ export default function ChatBoxStudio() {
   const [recording, setRecording] = useState(false);
   const [progress, setProgress] = useState({ stage: '', done: 0, total: 0 });
   const [hint, setHint] = useState({ text: '', isError: false });
-  const [preview, setPreview] = useState(null); // { text, sending } while playing
+  const [preview, setPreview] = useState(null); // the frame's state while playing
+  const [sound, setSound] = useState(null); // { samples, sampleRate, durationMs }
   const [stage, setStage] = useState({ width: 0, height: 0 });
   const [boxHeight, setBoxHeight] = useState(0);
   const [boxEl, setBoxEl] = useState(null);
@@ -236,6 +341,8 @@ export default function ChatBoxStudio() {
   const cancelRef = useRef(false);
   const previewRef = useRef(0);
   const objectUrlsRef = useRef([]);
+  // The preview's audio, so stopping it can stop the sound with it.
+  const previewAudioRef = useRef(null);
   // The box's height with the whole message in it, which is where the recording
   // anchors the composition.
   const fullBoxHeight = useRef(0);
@@ -270,6 +377,12 @@ export default function ChatBoxStudio() {
           LIMITS.startDelayMs,
           DEFAULTS.startDelayMs
         ),
+        attachCount: attachments.length,
+        attachIntervalMs: clampSetting(
+          settings.attachIntervalMs,
+          LIMITS.attachIntervalMs,
+          DEFAULTS.attachIntervalMs
+        ),
         pauseBeforeSendMs: clampSetting(
           settings.pauseBeforeSendMs,
           LIMITS.pauseBeforeSendMs,
@@ -283,7 +396,9 @@ export default function ChatBoxStudio() {
         fps,
       }),
     [
+      attachments.length,
       fps,
+      settings.attachIntervalMs,
       settings.cps,
       settings.pauseBeforeSendMs,
       settings.startDelayMs,
@@ -323,10 +438,26 @@ export default function ChatBoxStudio() {
 
   if (!preview) fullBoxHeight.current = boxHeight;
 
+  // The typing sound the last visit left behind, decoded once to the rate the
+  // encoder wants. A clip that will no longer decode is dropped quietly — it is
+  // the one thing here that is a file rather than a setting.
+  useEffect(() => {
+    let live = true;
+    loadSound().then(async (blob) => {
+      if (!live || !blob) return;
+      const decoded = await decodeMono(await blob.arrayBuffer(), AUDIO_SAMPLE_RATE);
+      if (live && decoded) setSound(decoded);
+    });
+    return () => {
+      live = false;
+    };
+  }, []);
+
   useEffect(
     () => () => {
       objectUrlsRef.current.forEach((url) => URL.revokeObjectURL(url));
       cancelAnimationFrame(previewRef.current);
+      previewAudioRef.current?.close();
     },
     []
   );
@@ -346,25 +477,72 @@ export default function ChatBoxStudio() {
   // it will be when the message is finished.
   const boxLift = (Math.max(0, fullBoxHeight.current - boxHeight) / 2) * boxScale;
 
+  // Play the plan through the real DOM box — and, if there is one, through the
+  // typing sound, built by the same function the recorder uses. So the preview
+  // is what the file will be, ears included.
   const playPreview = useCallback(() => {
     cancelAnimationFrame(previewRef.current);
+    previewAudioRef.current?.close();
+    previewAudioRef.current = null;
+
+    const track = sound ? typingTrack(sound, plan, plan.totalMs) : null;
+    if (track) {
+      try {
+        const Ctx = window.AudioContext || window.webkitAudioContext;
+        const audioCtx = new Ctx({ sampleRate: track.sampleRate });
+        const buffer = audioCtx.createBuffer(1, track.samples.length, track.sampleRate);
+        buffer.copyToChannel(track.samples, 0);
+        const source = audioCtx.createBufferSource();
+        source.buffer = buffer;
+        source.connect(audioCtx.destination);
+        source.start();
+        previewAudioRef.current = audioCtx;
+      } catch {
+        /* no Web Audio, or a blocked context — the picture still plays */
+      }
+    }
+
     const startedAt = performance.now();
     const step = () => {
       const ms = performance.now() - startedAt;
       if (ms >= plan.totalMs) {
+        previewAudioRef.current?.close();
+        previewAudioRef.current = null;
         setPreview(null);
         return;
       }
-      const state = stateAt(ms, plan);
-      setPreview({ text: state.text, sending: state.sending });
+      setPreview(stateAt(ms, plan));
       previewRef.current = requestAnimationFrame(step);
     };
     previewRef.current = requestAnimationFrame(step);
-  }, [plan]);
+  }, [plan, sound]);
 
   function stopPreview() {
     cancelAnimationFrame(previewRef.current);
+    previewAudioRef.current?.close();
+    previewAudioRef.current = null;
     setPreview(null);
+  }
+
+  // Take a typing clip: decode it for the recorder and the preview, and keep
+  // the file itself so it is still here next time.
+  async function chooseSound(file) {
+    if (!file) return;
+    const decoded = await decodeMono(await file.arrayBuffer(), AUDIO_SAMPLE_RATE);
+    if (!decoded) {
+      setHint({ text: `${file.name} could not be decoded as audio.`, isError: true });
+      return;
+    }
+    setSound(decoded);
+    set('soundName', file.name);
+    setHint({ text: '', isError: false });
+    saveSound(file);
+  }
+
+  function removeSound() {
+    setSound(null);
+    set('soundName', '');
+    clearSound();
   }
 
   function applyPreset(value) {
@@ -430,6 +608,7 @@ export default function ChatBoxStudio() {
         placeholder: settings.placeholder,
         modelChip: settings.modelChip,
         attachments,
+        sound,
         plan,
         onProgress: setProgress,
         shouldStop: () => cancelRef.current,
@@ -451,7 +630,14 @@ export default function ChatBoxStudio() {
           error: null,
         });
         setHint({
-          text: `Recorded ${plan.frameCount} frames — play it below, then download.`,
+          text: [
+            `Recorded ${plan.frameCount} frames — play it below, then download.`,
+            result.audio?.dropped && 'This browser could not encode the sound, so it is silent.',
+            result.audio?.wrapped &&
+              'The typing outlasts your clip, so the sound starts over once in it.',
+          ]
+            .filter(Boolean)
+            .join(' '),
           isError: false,
         });
       }
@@ -467,6 +653,12 @@ export default function ChatBoxStudio() {
   const boxText = preview ? preview.text : settings.text;
   const durationText = `${(plan.totalMs / 1000).toFixed(1)}s · ${plan.frameCount} frames`;
   const presetValue = `${width}x${height}`;
+  // While the preview plays, the box holds what has landed so far.
+  const shownAttachments = preview ? attachments.slice(0, preview.attachCount) : attachments;
+  // How much of the clip the typing will actually use, against how much there
+  // is — a two-second clip under a ten-second message has to start over.
+  const soundNeededMs = sound ? neededMs(typingRuns(plan)) : 0;
+  const soundShort = sound ? soundNeededMs > sound.durationMs : false;
 
   return (
     <div className="min-h-screen flex flex-col lg:flex-row">
@@ -494,7 +686,7 @@ export default function ChatBoxStudio() {
                   boxRef={setBoxEl}
                   text={boxText}
                   onTextChange={(value) => set('text', value)}
-                  attachments={attachments}
+                  attachments={shownAttachments}
                   onAttachmentsChange={setAttachments}
                   placeholder={settings.placeholder}
                   modelChip={settings.modelChip}
@@ -629,6 +821,81 @@ export default function ChatBoxStudio() {
           </div>
         </Panel>
 
+        <Panel title="The box">
+          <div className={FIELD}>
+            <label className={LABEL} htmlFor="headlineInput">
+              Title above the box
+            </label>
+            <input
+              id="headlineInput"
+              type="text"
+              value={settings.headline}
+              onChange={(e) => set('headline', e.target.value)}
+              className={CONTROL}
+              placeholder="Leave empty for no title"
+            />
+            <div className={FIELD_HELP}>
+              What the frame opens on, above the box. Empty for none.
+            </div>
+          </div>
+          <div className={FIELD}>
+            <label className={LABEL} htmlFor="placeholderInput">
+              Placeholder in the empty box
+            </label>
+            <input
+              id="placeholderInput"
+              type="text"
+              value={settings.placeholder}
+              onChange={(e) => set('placeholder', e.target.value)}
+              className={CONTROL}
+              placeholder="Leave empty for none"
+            />
+            <div className={FIELD_HELP}>On screen until the first character is typed over it.</div>
+          </div>
+          <div className={FIELD}>
+            <label className={LABEL} htmlFor="chipInput">
+              Model chip
+            </label>
+            <input
+              id="chipInput"
+              type="text"
+              value={settings.modelChip}
+              onChange={(e) => set('modelChip', e.target.value)}
+              className={CONTROL}
+              placeholder="Leave empty for none"
+            />
+          </div>
+        </Panel>
+
+        <Panel title="Images it drops in">
+          <ImagesDrop
+            images={attachments}
+            onChange={setAttachments}
+            disabled={recording || !!preview}
+            emptyLabel="Click or drop images"
+            hint="They land in the box one by one, before any typing"
+          />
+          {attachments.length > 0 && (
+            <div className="mt-4">
+              <NumberField
+                id="attachIntervalInput"
+                label="One lands every"
+                value={settings.attachIntervalMs}
+                onChange={(v) => set('attachIntervalMs', v)}
+                suffix="ms"
+                min={LIMITS.attachIntervalMs[0]}
+                max={LIMITS.attachIntervalMs[1]}
+                step={50}
+                help={`${attachments.length} ${attachments.length === 1 ? 'image' : 'images'}, then one more beat before the typing starts — ${((plan.typingStartMs - clampSetting(settings.startDelayMs, LIMITS.startDelayMs, DEFAULTS.startDelayMs)) / 1000).toFixed(1)}s of the video.`}
+              />
+            </div>
+          )}
+          <div className={FIELD_HELP}>
+            The same list as the box on the left — drop them here or on it, either way they are
+            dropped into it during the recording, not already sitting there.
+          </div>
+        </Panel>
+
         <Panel title="What it types">
           <div className={FIELD}>
             <label className={LABEL} htmlFor="messageInput">
@@ -642,8 +909,7 @@ export default function ChatBoxStudio() {
               placeholder="What gets typed into the box"
             />
             <div className={FIELD_HELP}>
-              Or type straight into the box on the left — it is the same text. Drop images on the
-              box to attach them; they are in the recording from the first frame.
+              Or type straight into the box on the left — it is the same text.
             </div>
           </div>
 
@@ -702,51 +968,34 @@ export default function ChatBoxStudio() {
             />
           </div>
           <div className={FIELD_HELP}>
-            An empty box, the message typed at that speed, a pause, then the send — the button spins
-            for the wait and that is the end of the video. {durationText} in all.
+            An empty box, the images landing in it, the message typed at that speed, a pause, then
+            the send — the button spins for the wait and that is the end of the video.{' '}
+            {durationText} in all.
           </div>
         </Panel>
 
-        <Panel title="The box">
-          <div className={FIELD}>
-            <label className={LABEL} htmlFor="headlineInput">
-              Headline above the box
-            </label>
-            <input
-              id="headlineInput"
-              type="text"
-              value={settings.headline}
-              onChange={(e) => set('headline', e.target.value)}
-              className={CONTROL}
-              placeholder="Leave empty for none"
-            />
-          </div>
-          <div className="grid grid-cols-2 gap-3">
-            <div className={FIELD}>
-              <label className={LABEL} htmlFor="placeholderInput">
-                Placeholder
-              </label>
-              <input
-                id="placeholderInput"
-                type="text"
-                value={settings.placeholder}
-                onChange={(e) => set('placeholder', e.target.value)}
-                className={CONTROL}
-              />
+        <Panel title="Typing sound">
+          <SoundDrop
+            name={settings.soundName}
+            sound={sound}
+            disabled={recording}
+            onChoose={chooseSound}
+            onRemove={removeSound}
+          />
+          {sound && (
+            <div className={`${FIELD_HELP} mt-2`}>
+              Heard only while characters are landing — silent before the typing, while the images
+              drop in, at a full stop, and from the send onwards. It plays through your clip rather
+              than repeating the same moment: this message uses {(soundNeededMs / 1000).toFixed(1)}s
+              of the {(sound.durationMs / 1000).toFixed(1)}s you gave it.
             </div>
-            <div className={FIELD}>
-              <label className={LABEL} htmlFor="chipInput">
-                Model chip
-              </label>
-              <input
-                id="chipInput"
-                type="text"
-                value={settings.modelChip}
-                onChange={(e) => set('modelChip', e.target.value)}
-                className={CONTROL}
-              />
+          )}
+          {soundShort && (
+            <div className="font-mono text-[11.5px] text-warning mt-2 leading-[1.4]">
+              The typing needs more than the clip has, so it starts over once. A longer clip fixes
+              it.
             </div>
-          </div>
+          )}
         </Panel>
 
         <Panel title="Recording">
@@ -772,6 +1021,7 @@ export default function ChatBoxStudio() {
             cacheKey={item ? gen.outputKey(item) : ''}
             progress={progress}
             recording={recording}
+            hasSound={!!sound}
           />
 
           {hint.text && (

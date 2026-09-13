@@ -1,21 +1,24 @@
 // What happens, and when, in a chat box recording.
 //
-// A recording is four stretches of time: an empty box for a beat, the message
-// typed a character at a time, a pause with the message sitting there, then the
-// send — after which the button spins for a few seconds and that is the video.
+// A recording is five stretches of time: an empty box for a beat, the images
+// landing in it one after another, the message typed a character at a time, a
+// pause with the message sitting there, then the send — after which the button
+// spins for a few seconds and that is the video.
 //
 // This module is the whole of that, and it is pure: `planRecording` turns the
-// settings into a plan (when each character lands, when the send happens, how
-// long the video is) and `stateAt` answers what the box looks like at a given
-// millisecond. The recorder (record.js) only walks frames and hands each state
-// to the painter, and the preview in the studio plays the same plan through the
-// real DOM box — so both are the same animation, and this is the part that can
-// be tested without a browser.
+// settings into a plan (when each image lands, when each character lands, when
+// the send happens, how long the video is) and `stateAt` answers what the box
+// looks like at a given millisecond. The recorder (record.js) only walks frames
+// and hands each state to the painter, the typing sound is cut to the same plan
+// (audio.js), and the preview in the studio plays it through the real DOM box —
+// so all three are the same animation, and this is the part that can be tested
+// without a browser.
 
 export const DEFAULTS = {
   // ~14 characters a second is a brisk but human pace (≈170 words a minute).
   cps: 14,
   startDelayMs: 700,
+  attachIntervalMs: 550,
   pauseBeforeSendMs: 600,
   waitAfterSendMs: 2500,
   fps: 30,
@@ -26,6 +29,7 @@ export const DEFAULTS = {
 export const LIMITS = {
   cps: [1, 60],
   startDelayMs: [0, 10000],
+  attachIntervalMs: [120, 5000],
   pauseBeforeSendMs: [0, 10000],
   waitAfterSendMs: [0, 30000],
   fps: [10, 60],
@@ -33,6 +37,11 @@ export const LIMITS = {
 
 // A cursor on for half a second and off for half a second.
 export const CARET_PERIOD_MS = 1060;
+
+// How long an image takes to settle into the box once it lands: it scales and
+// fades in, and the box's border flashes, so a reel reads as "that was dropped
+// in" rather than "that was always there".
+export const DROP_MS = 220;
 
 // Long enough for any reel, short enough that a stray zero in a box can't ask
 // the browser to encode an hour of video.
@@ -87,10 +96,16 @@ export function keystrokeTimes(text, cps, seed = 1) {
 }
 
 // The settings, resolved into the shape the recorder and the preview both walk.
+//
+// The images land first, one every `attachIntervalMs`, and typing starts one
+// interval after the last of them — the beat that reads as "…and now I'll say
+// what I want done with those".
 export function planRecording({
   text = '',
   cps = DEFAULTS.cps,
   startDelayMs = DEFAULTS.startDelayMs,
+  attachCount = 0,
+  attachIntervalMs = DEFAULTS.attachIntervalMs,
   pauseBeforeSendMs = DEFAULTS.pauseBeforeSendMs,
   waitAfterSendMs = DEFAULTS.waitAfterSendMs,
   fps = DEFAULTS.fps,
@@ -101,12 +116,17 @@ export function planRecording({
   // The last character is held for one more keystroke before the pause starts,
   // so the message doesn't jump straight from its last letter into the wait.
   const typingMs = times.length ? times[times.length - 1] + 1000 / cps : 0;
-  const typingStartMs = startDelayMs;
+  const attachTimes = Array.from(
+    { length: Math.max(0, attachCount) },
+    (_, i) => startDelayMs + i * attachIntervalMs
+  );
+  const typingStartMs = startDelayMs + attachTimes.length * attachIntervalMs;
   const sendAtMs = typingStartMs + typingMs + pauseBeforeSendMs;
   const totalMs = sendAtMs + waitAfterSendMs;
   return {
     chars,
     times,
+    attachTimes,
     fps,
     typingStartMs,
     typingMs,
@@ -127,8 +147,17 @@ function charsAt(ms, plan) {
   return count;
 }
 
-// What the box looks like at a moment: how much of the message is typed, which
-// phase it is in, and whether the caret is showing.
+// How many images are in the box at `ms`.
+function attachedAt(ms, plan) {
+  const times = plan.attachTimes || [];
+  let count = 0;
+  while (count < times.length && times[count] <= ms) count += 1;
+  return count;
+}
+
+// What the box looks like at a moment: which images have landed and how far the
+// newest one is into its landing, how much of the message is typed, which phase
+// it is in, and whether the caret is showing.
 //
 // The caret sits solid while the characters are landing (a blinking cursor
 // under a fast typist looks like a rendering bug), blinks while the box waits,
@@ -139,11 +168,24 @@ export function stateAt(ms, plan) {
   const typing = !sending && ms >= plan.typingStartMs && ms < plan.typingStartMs + plan.typingMs;
   const charCount = sending ? plan.chars.length : charsAt(ms, plan);
   const blinkOn = Math.floor(ms / (CARET_PERIOD_MS / 2)) % 2 === 0;
+  const attachCount = attachedAt(ms, plan);
+  const landedAt = attachCount ? plan.attachTimes[attachCount - 1] : null;
   return {
     ms,
     charCount,
     text: plan.chars.slice(0, charCount).join(''),
-    phase: sending ? 'sending' : typing ? 'typing' : charCount ? 'pause' : 'idle',
+    attachCount,
+    // 0 → just landed, 1 → settled. Nothing to animate before the first one.
+    dropProgress: landedAt === null ? 1 : Math.min(1, (ms - landedAt) / DROP_MS),
+    phase: sending
+      ? 'sending'
+      : typing
+        ? 'typing'
+        : charCount
+          ? 'pause'
+          : attachCount
+            ? 'attaching'
+            : 'idle',
     sending,
     caretOn: !sending && (typing || blinkOn),
   };
