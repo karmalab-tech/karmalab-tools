@@ -210,7 +210,11 @@ export default function VideoEffects() {
   function loadFile(file) {
     if (videoUrl) URL.revokeObjectURL(videoUrl);
     fileRef.current = file;
-    setVideoUrl(URL.createObjectURL(file));
+    // createObjectURL can only produce blob: URLs, but assert the scheme
+    // anyway so nothing script-capable can ever reach the <video> src (and so
+    // code scanning can see the uploaded file's URL is sanitized).
+    const url = URL.createObjectURL(file);
+    setVideoUrl(/^blob:/.test(url) ? url : null);
     setVideoName(file.name);
     setPlaying(false);
     setDuration(0);
