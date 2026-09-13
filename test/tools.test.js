@@ -1,0 +1,1361 @@
+// The tools' own logic: what each model wants as input, what persists between
+// sessions (the run recovered after a closed tab, and the history of finished
+// runs), how the Batch Video Studio's two modes flatten into one run list, and
+// how the Image Chain Studio finds the step a chain continues from.
+// None of it needs a DOM; `localStorage` is stubbed where it is touched.
+import { readFileSync } from 'node:fs';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+
+import { CHAIN_MODEL_KEYS, MODEL_CONFIGS, buildImageInput } from '../src/shared/imageModels.js';
+import { buildVideoInput } from '../src/shared/videoModels.js';
+import { loadKey, saveKey, storage } from '../src/apps/batch/storage.js';
+import { HISTORY_LIMIT, createToolStorage } from '../src/shared/storage.js';
+import { TOOLS, toolLabel } from '../src/shared/tools.js';
+import {
+  MAX_BYTES,
+  cacheKey,
+  cacheSupported,
+  formatBytes,
+  keyRun,
+  planEviction,
+} from '../src/shared/outputCache.js';
+import { routes } from '../server/routes.js';
+import { runCounts, runStatus, runTabTitle, serializeItem, uiStatus } from '../src/shared/runs.js';
+import { buildItems, splitPrompts } from '../src/apps/batchVideo/items.js';
+import {
+  MAX_STEPS,
+  chainSource,
+  imageName,
+  nextStepIndex,
+  parseStepCount,
+  sourceLabel,
+  stepId,
+} from '../src/apps/imageChain/chain.js';
+import {
+  DEFAULT_MS_PER_IMAGE,
+  MAX_MS_PER_IMAGE,
+  MIN_MS_PER_IMAGE,
+  frameSequence,
+  parseDurationMs,
+  totalDurationMs,
+} from '../src/shared/imageVideo.js';
+import {
+  DEFAULTS,
+  DROP_MS,
+  LIMITS,
+  clampSetting,
+  keystrokeTimes,
+  planRecording,
+  stateAt,
+} from '../src/apps/chatBox/timeline.js';
+import {
+  DEFAULT_BOX_WIDTH_PCT,
+  RESOLUTION_PRESETS,
+  SIZE_LIMITS,
+  boxCssWidth,
+  extensionForType,
+  parseSize,
+  recordingBasename,
+  sceneScale,
+} from '../src/apps/chatBox/scene.js';
+import { DEFAULT_LAYOUT_WIDTH, METRICS } from '../src/apps/chatBox/design.js';
+import {
+  MERGE_GAP_MS,
+  RUN_TAIL_MS,
+  arrangeClips,
+  clipTiming,
+  findOnsets,
+  renderTrack,
+  rmsEnvelope,
+  typingRuns,
+} from '../src/apps/chatBox/audio.js';
+
+const base = { promptText: 'a cat', suffix: '', aspect: '1:1', extraValues: {} };
+
+describe('buildImageInput', () => {
+  it('sends the prompt as-is when there is no suffix', () => {
+    expect(buildImageInput({}, base)).toEqual({ prompt: 'a cat' });
+  });
+
+  it('appends a suffix and collapses the whitespace', () => {
+    expect(buildImageInput({}, { ...base, suffix: '  in watercolour  ' })).toEqual({
+      prompt: 'a cat in watercolour',
+    });
+  });
+
+  it('treats a whitespace-only suffix as absent', () => {
+    expect(buildImageInput({}, { ...base, suffix: '   ' })).toEqual({ prompt: 'a cat' });
+  });
+
+  it('writes the aspect to whichever key the model uses', () => {
+    expect(buildImageInput({ aspectField: 'aspect_ratio' }, base).aspect_ratio).toBe('1:1');
+    expect(buildImageInput({ aspectField: 'size' }, base).size).toBe('1:1');
+  });
+
+  it('omits the aspect entirely for a model that takes none', () => {
+    expect(buildImageInput({}, base)).not.toHaveProperty('aspect_ratio');
+  });
+
+  it("carries the model's static extra input", () => {
+    expect(buildImageInput({ extraInput: { quality: 'high' } }, base)).toEqual({
+      prompt: 'a cat',
+      quality: 'high',
+    });
+  });
+
+  it('sends a reference image bare or wrapped, per the model', () => {
+    const withImage = { ...base, referenceImage: 'data:image/png;base64,AAA' };
+    expect(buildImageInput({ imageField: 'image' }, withImage).image).toBe(
+      'data:image/png;base64,AAA'
+    );
+    expect(
+      buildImageInput({ imageField: 'input_images', imageIsArray: true }, withImage).input_images
+    ).toEqual(['data:image/png;base64,AAA']);
+  });
+
+  it('omits the image key when the model supports one but none was given', () => {
+    expect(buildImageInput({ imageField: 'image' }, base)).not.toHaveProperty('image');
+  });
+
+  it('drops an image the model cannot accept', () => {
+    const withImage = { ...base, referenceImage: 'data:image/png;base64,AAA' };
+    expect(buildImageInput({ imageField: null }, withImage)).toEqual({ prompt: 'a cat' });
+  });
+
+  it('includes filled-in extra fields and skips blank ones', () => {
+    const cfg = {
+      extraFields: [{ key: 'openai_api_key' }, { key: 'negative_prompt' }, { key: 'seed' }],
+    };
+    const input = buildImageInput(cfg, {
+      ...base,
+      extraValues: { openai_api_key: '  sk-test  ', negative_prompt: '', seed: '   ' },
+    });
+    expect(input.openai_api_key).toBe('sk-test');
+    expect(input).not.toHaveProperty('negative_prompt');
+    expect(input).not.toHaveProperty('seed');
+  });
+
+  it("lets an extra field override the model's static input", () => {
+    const input = buildImageInput(
+      { extraInput: { quality: 'high' }, extraFields: [{ key: 'quality' }] },
+      { ...base, extraValues: { quality: 'low' } }
+    );
+    expect(input.quality).toBe('low');
+  });
+});
+
+// The video tools' equivalent: same job, a different per-model field shape.
+describe('buildVideoInput', () => {
+  const cfg = { fields: [{ key: 'duration' }, { key: 'resolution' }], imageField: 'first_frame' };
+
+  it("sends the prompt plus the model's static input", () => {
+    expect(
+      buildVideoInput(
+        { fields: [], extraInput: { fps: 24 } },
+        { prompt: 'a cat', optionValues: {} }
+      )
+    ).toEqual({
+      prompt: 'a cat',
+      fps: 24,
+    });
+  });
+
+  it('includes the option values the model declares', () => {
+    const input = buildVideoInput(cfg, {
+      prompt: 'a cat',
+      optionValues: { duration: 8, resolution: '1080p' },
+    });
+    expect(input).toEqual({ prompt: 'a cat', duration: 8, resolution: '1080p' });
+  });
+
+  it('skips options that are unset, null or blank — but keeps false and 0', () => {
+    const boolCfg = {
+      fields: [{ key: 'sound' }, { key: 'seed' }, { key: 'style' }, { key: 'gone' }],
+    };
+    const input = buildVideoInput(boolCfg, {
+      prompt: 'a cat',
+      optionValues: { sound: false, seed: 0, style: '', gone: null },
+    });
+    expect(input.sound).toBe(false);
+    expect(input.seed).toBe(0);
+    expect(input).not.toHaveProperty('style');
+    expect(input).not.toHaveProperty('gone');
+  });
+
+  it("writes the start frame to the model's image field", () => {
+    const input = buildVideoInput(cfg, {
+      prompt: 'a cat',
+      optionValues: {},
+      startFrameDataUri: 'data:image/jpeg;base64,AAA',
+    });
+    expect(input.first_frame).toBe('data:image/jpeg;base64,AAA');
+  });
+
+  it('omits the image field for text-to-video', () => {
+    const input = buildVideoInput(cfg, { prompt: 'a cat', optionValues: {} });
+    expect(input).not.toHaveProperty('first_frame');
+  });
+});
+
+// The run model every tool normalises its cards to: what gets persisted,
+// what a run's progress adds up to, and what the browser tab says about it.
+describe('serializeItem', () => {
+  it('keeps the fields a recovered card is rebuilt from', () => {
+    expect(
+      serializeItem({
+        id: 'r1',
+        predictionId: 'p1',
+        status: 'running',
+        prompt: 'a cat',
+        label: 'Video 1',
+        basename: 'video-01',
+        outputUrl: null,
+        error: null,
+        index: 0,
+      })
+    ).toEqual({
+      id: 'r1',
+      predictionId: 'p1',
+      status: 'running',
+      prompt: 'a cat',
+      label: 'Video 1',
+      basename: 'video-01',
+      outputUrl: null,
+      error: null,
+      index: 0,
+    });
+  });
+
+  // The whole point of the whitelist: image data URIs would blow the quota.
+  it('drops in-memory extras like frames and object URLs', () => {
+    const persisted = serializeItem({
+      id: 'c1',
+      status: 'succeeded',
+      startFrame: 'data:image/jpeg;base64,AAA',
+      endFrame: 'data:image/jpeg;base64,BBB',
+      videoUrl: 'blob:http://localhost/abc',
+    });
+    expect(persisted).toEqual({ id: 'c1', status: 'succeeded' });
+  });
+
+  it('omits keys that were never set rather than writing undefined', () => {
+    expect(Object.keys(serializeItem({ id: 'r1', status: 'queued' }))).toEqual(['id', 'status']);
+  });
+});
+
+describe('runCounts', () => {
+  const items = (...statuses) => statuses.map((status, i) => ({ id: `r${i}`, status }));
+
+  it('counts what landed, what failed and what is still going', () => {
+    expect(runCounts(items('succeeded', 'failed', 'running', 'queued'))).toEqual({
+      total: 4,
+      succeeded: 1,
+      failed: 1,
+      done: 2,
+      active: 2,
+    });
+  });
+
+  it('has nothing active once every item is terminal', () => {
+    expect(runCounts(items('succeeded', 'failed')).active).toBe(0);
+  });
+
+  it('handles an empty run', () => {
+    expect(runCounts([])).toEqual({ total: 0, succeeded: 0, failed: 0, done: 0, active: 0 });
+  });
+});
+
+describe('runStatus', () => {
+  const items = (...statuses) => statuses.map((status, i) => ({ id: `r${i}`, status }));
+
+  it('is running while anything is in flight', () => {
+    expect(runStatus(items('succeeded', 'running'))).toBe('running');
+    expect(runStatus(items('failed', 'queued'))).toBe('running');
+  });
+
+  it('is succeeded or failed when the whole run went one way', () => {
+    expect(runStatus(items('succeeded', 'succeeded'))).toBe('succeeded');
+    expect(runStatus(items('failed', 'failed'))).toBe('failed');
+  });
+
+  it('is partial for a mixed result', () => {
+    expect(runStatus(items('succeeded', 'failed'))).toBe('partial');
+  });
+});
+
+describe('runTabTitle', () => {
+  const counts = (over) => ({ total: 6, succeeded: 2, failed: 0, done: 2, active: 4, ...over });
+
+  it('shows the progress while the run is going', () => {
+    expect(runTabTitle('Studio', counts(), false)).toBe('⏳ 2/6 · Studio');
+  });
+
+  it('marks a finished run, and flags one that had failures', () => {
+    const finished = counts({ succeeded: 6, done: 6, active: 0 });
+    expect(runTabTitle('Studio', finished, true)).toBe('✅ 6/6 · Studio');
+    const withFailures = counts({ succeeded: 4, failed: 2, done: 6, active: 0 });
+    expect(runTabTitle('Studio', withFailures, true)).toBe('⚠️ 4/6 · Studio');
+  });
+
+  it('leaves the page title alone when there is nothing to report', () => {
+    expect(runTabTitle('Studio', counts({ succeeded: 6, done: 6, active: 0 }), false)).toBe(
+      'Studio'
+    );
+    expect(runTabTitle('Studio', runCounts([]), true)).toBe('Studio');
+  });
+
+  it('prefers the progress over the finished marker', () => {
+    expect(runTabTitle('Studio', counts(), true)).toBe('⏳ 2/6 · Studio');
+  });
+});
+
+describe('uiStatus', () => {
+  it("maps Replicate's wording onto the UI's", () => {
+    expect(uiStatus('starting')).toBe('queued');
+    expect(uiStatus('processing')).toBe('running');
+    expect(uiStatus('succeeded')).toBe('succeeded');
+    expect(uiStatus('canceled')).toBe('canceled');
+  });
+});
+
+const PREFIX = 'karmalab.batchImageStudio.';
+
+function stubLocalStorage(store = new Map()) {
+  globalThis.localStorage = {
+    getItem: (k) => (store.has(k) ? store.get(k) : null),
+    setItem: (k, v) => store.set(k, String(v)),
+    removeItem: (k) => store.delete(k),
+  };
+  return store;
+}
+
+const item = (over = {}) => ({
+  id: 'r1',
+  predictionId: 'p1',
+  status: 'running',
+  prompt: 'a cat',
+  ...over,
+});
+
+const run = (over = {}) => ({
+  id: 'run-1',
+  title: '2 images',
+  createdAt: 1700000000000,
+  items: [item()],
+  ...over,
+});
+
+describe('loadKey / saveKey', () => {
+  let store;
+  beforeEach(() => {
+    store = stubLocalStorage();
+  });
+
+  it('namespaces what it writes', () => {
+    saveKey('model', 'openai/gpt-image-2');
+    expect(store.get(`${PREFIX}model`)).toBe('openai/gpt-image-2');
+    expect(loadKey('model')).toBe('openai/gpt-image-2');
+  });
+
+  it('returns an empty string for a key that was never set', () => {
+    expect(loadKey('nope')).toBe('');
+  });
+
+  it('removes the key when saving an empty value', () => {
+    saveKey('model', 'flux');
+    saveKey('model', '');
+    expect(store.has(`${PREFIX}model`)).toBe(false);
+    expect(loadKey('model')).toBe('');
+  });
+});
+
+// The run in progress is what a reopened tab recovers from, so what it stores
+// (and what it refuses to store) is the whole feature.
+describe('the current run', () => {
+  let store;
+  beforeEach(() => {
+    store = stubLocalStorage();
+  });
+
+  it('starts empty', () => {
+    expect(storage.loadCurrentRun()).toBeNull();
+  });
+
+  it('round-trips a run with its items', () => {
+    storage.saveCurrentRun(run());
+    expect(storage.loadCurrentRun()).toEqual({
+      id: 'run-1',
+      title: '2 images',
+      createdAt: 1700000000000,
+      finishedAt: null,
+      items: [item()],
+    });
+  });
+
+  it('namespaces the entry it writes', () => {
+    storage.saveCurrentRun(run());
+    expect(store.has(`${PREFIX}currentRun`)).toBe(true);
+  });
+
+  it('clears the entry', () => {
+    storage.saveCurrentRun(run());
+    storage.clearCurrentRun();
+    expect(store.has(`${PREFIX}currentRun`)).toBe(false);
+    expect(storage.loadCurrentRun()).toBeNull();
+  });
+
+  it('recovers from corrupt stored JSON instead of throwing', () => {
+    store.set(`${PREFIX}currentRun`, '{not json');
+    expect(storage.loadCurrentRun()).toBeNull();
+  });
+
+  it('ignores a stored run with no usable items', () => {
+    store.set(`${PREFIX}currentRun`, JSON.stringify({ id: 'run-1', items: 'nope' }));
+    expect(storage.loadCurrentRun()).toBeNull();
+    store.set(`${PREFIX}currentRun`, JSON.stringify({ id: 'run-1', items: [{}, null] }));
+    expect(storage.loadCurrentRun()).toBeNull();
+  });
+
+  it('fills in the metadata a hand-edited entry is missing', () => {
+    store.set(`${PREFIX}currentRun`, JSON.stringify({ items: [item()] }));
+    const loaded = storage.loadCurrentRun();
+    expect(loaded.id).toMatch(/^run-/);
+    expect(loaded.title).toBe('Generation');
+    expect(Number.isFinite(loaded.createdAt)).toBe(true);
+  });
+});
+
+describe('run history', () => {
+  let store;
+  beforeEach(() => {
+    store = stubLocalStorage();
+  });
+
+  it('starts empty', () => {
+    expect(storage.loadHistory()).toEqual([]);
+  });
+
+  it('archiving moves the current run into history', () => {
+    storage.saveCurrentRun(run());
+    storage.archiveRun(run({ finishedAt: 1700000001000 }));
+    expect(store.has(`${PREFIX}currentRun`)).toBe(false);
+    expect(storage.loadHistory().map((r) => r.id)).toEqual(['run-1']);
+    expect(storage.loadHistory()[0].finishedAt).toBe(1700000001000);
+  });
+
+  it('keeps the newest run first', () => {
+    storage.archiveRun(run({ id: 'run-1' }));
+    storage.archiveRun(run({ id: 'run-2' }));
+    expect(storage.loadHistory().map((r) => r.id)).toEqual(['run-2', 'run-1']);
+  });
+
+  it('replaces rather than duplicates a run archived twice', () => {
+    storage.archiveRun(run({ id: 'run-1', title: 'first' }));
+    storage.archiveRun(run({ id: 'run-1', title: 'second' }));
+    const history = storage.loadHistory();
+    expect(history).toHaveLength(1);
+    expect(history[0].title).toBe('second');
+  });
+
+  it('removes a run from the list', () => {
+    storage.archiveRun(run({ id: 'run-1' }));
+    storage.archiveRun(run({ id: 'run-2' }));
+    storage.removeHistoryRun('run-1');
+    expect(storage.loadHistory().map((r) => r.id)).toEqual(['run-2']);
+  });
+
+  it('leaves the list alone when removing a run that is not in it', () => {
+    storage.archiveRun(run({ id: 'run-1' }));
+    storage.removeHistoryRun('run-nope');
+    expect(storage.loadHistory().map((r) => r.id)).toEqual(['run-1']);
+  });
+
+  it('caps the list so it cannot grow without bound', () => {
+    for (let i = 0; i < HISTORY_LIMIT + 5; i++) storage.archiveRun(run({ id: `run-${i}` }));
+    const history = storage.loadHistory();
+    expect(history).toHaveLength(HISTORY_LIMIT);
+    // Newest kept, oldest dropped.
+    expect(history[0].id).toBe(`run-${HISTORY_LIMIT + 4}`);
+    expect(history.some((r) => r.id === 'run-0')).toBe(false);
+  });
+
+  it('writes back a refreshed run that is already in history', () => {
+    storage.archiveRun(run({ id: 'run-1' }));
+    storage.updateHistoryRun(run({ id: 'run-1', items: [item({ status: 'succeeded' })] }));
+    expect(storage.loadHistory()[0].items[0].status).toBe('succeeded');
+  });
+
+  it('does not add a run that is not in history yet', () => {
+    storage.updateHistoryRun(run({ id: 'run-9' }));
+    expect(storage.loadHistory()).toEqual([]);
+  });
+
+  it('clears the whole list', () => {
+    storage.archiveRun(run());
+    storage.clearHistory();
+    expect(storage.loadHistory()).toEqual([]);
+    expect(store.has(`${PREFIX}runHistory`)).toBe(false);
+  });
+
+  it('drops entries it cannot make sense of', () => {
+    store.set(`${PREFIX}runHistory`, JSON.stringify([run(), null, { items: [] }]));
+    expect(storage.loadHistory()).toHaveLength(1);
+  });
+});
+
+// Tabs closed before the run model shipped left a flat list of pending jobs.
+describe('migrating pre-run-model pending jobs', () => {
+  let store;
+  beforeEach(() => {
+    store = stubLocalStorage();
+  });
+
+  it('reads them back as one recovered run', () => {
+    store.set(
+      `${PREFIX}pendingJobs`,
+      JSON.stringify([
+        { predictionId: 'p1', prompt: 'a cat' },
+        { predictionId: 'p2', prompt: 'a dog', label: 'Video 2', basename: 'video-02' },
+      ])
+    );
+    const recovered = storage.loadCurrentRun();
+    expect(recovered.items.map((i) => i.predictionId)).toEqual(['p1', 'p2']);
+    expect(recovered.items[0].status).toBe('running');
+    expect(recovered.items[1].basename).toBe('video-02');
+  });
+
+  it('drops the old entry so it is only recovered once', () => {
+    store.set(`${PREFIX}pendingJobs`, JSON.stringify([{ predictionId: 'p1' }]));
+    expect(storage.loadCurrentRun()).not.toBeNull();
+    expect(store.has(`${PREFIX}pendingJobs`)).toBe(false);
+    expect(storage.loadCurrentRun()).toBeNull();
+  });
+
+  it('ignores an empty or unusable entry', () => {
+    store.set(`${PREFIX}pendingJobs`, '[]');
+    expect(storage.loadCurrentRun()).toBeNull();
+    store.set(`${PREFIX}pendingJobs`, '{not json');
+    expect(storage.loadCurrentRun()).toBeNull();
+  });
+
+  it('prefers a real current run over the legacy entry', () => {
+    storage.saveCurrentRun(run());
+    store.set(`${PREFIX}pendingJobs`, JSON.stringify([{ predictionId: 'legacy' }]));
+    expect(storage.loadCurrentRun().id).toBe('run-1');
+  });
+});
+
+describe('when localStorage is unavailable', () => {
+  beforeEach(() => {
+    // Safari in private mode, and any browser with storage blocked, throws here.
+    globalThis.localStorage = {
+      getItem: vi.fn(() => {
+        throw new Error('SecurityError');
+      }),
+      setItem: vi.fn(() => {
+        throw new Error('SecurityError');
+      }),
+      removeItem: vi.fn(() => {
+        throw new Error('SecurityError');
+      }),
+    };
+  });
+
+  it('degrades quietly rather than breaking the tool', () => {
+    expect(loadKey('model')).toBe('');
+    expect(storage.loadCurrentRun()).toBeNull();
+    expect(storage.loadHistory()).toEqual([]);
+    expect(() => saveKey('model', 'flux')).not.toThrow();
+    expect(() => storage.saveCurrentRun(run())).not.toThrow();
+    expect(() => storage.archiveRun(run())).not.toThrow();
+    expect(() => storage.clearHistory()).not.toThrow();
+  });
+});
+
+// Over quota, keeping the newest runs beats losing the write entirely.
+describe('when storage is over quota', () => {
+  it('retries the history write with fewer runs', () => {
+    const store = new Map();
+    let allow = false;
+    globalThis.localStorage = {
+      getItem: (k) => (store.has(k) ? store.get(k) : null),
+      setItem: (k, v) => {
+        // Reject the first (full) write of each save, accept the retry.
+        allow = !allow;
+        if (allow) throw new Error('QuotaExceededError');
+        store.set(k, String(v));
+      },
+      removeItem: (k) => store.delete(k),
+    };
+    const tool = createToolStorage('quotaTest');
+    tool.saveHistory([run({ id: 'a' }), run({ id: 'b' }), run({ id: 'c' }), run({ id: 'd' })]);
+    expect(tool.loadHistory().map((r) => r.id)).toEqual(['a', 'b']);
+  });
+});
+
+describe('createToolStorage namespacing', () => {
+  let store;
+  beforeEach(() => {
+    store = stubLocalStorage();
+  });
+
+  it('prefixes keys with the tool namespace', () => {
+    createToolStorage('batchVideoStudio').saveKey('model', 'google/veo-3.1');
+    expect(store.get('karmalab.batchVideoStudio.model')).toBe('google/veo-3.1');
+  });
+
+  it("keeps two tools from reading each other's values", () => {
+    const images = createToolStorage('batchImageStudio');
+    const videos = createToolStorage('batchVideoStudio');
+
+    images.saveKey('model', 'flux');
+    videos.saveKey('model', 'veo');
+
+    expect(images.loadKey('model')).toBe('flux');
+    expect(videos.loadKey('model')).toBe('veo');
+  });
+
+  it("keeps two tools' runs and history apart", () => {
+    const images = createToolStorage('batchImageStudio');
+    const videos = createToolStorage('batchVideoStudio');
+
+    images.saveCurrentRun(run({ id: 'img-run' }));
+    videos.saveCurrentRun(run({ id: 'vid-run' }));
+    expect(images.loadCurrentRun().id).toBe('img-run');
+    expect(videos.loadCurrentRun().id).toBe('vid-run');
+
+    images.archiveRun(run({ id: 'img-run' }));
+    expect(images.loadCurrentRun()).toBeNull();
+    expect(images.loadHistory().map((r) => r.id)).toEqual(['img-run']);
+    // Archiving one tool's run must leave the other's alone.
+    expect(videos.loadCurrentRun().id).toBe('vid-run');
+    expect(videos.loadHistory()).toEqual([]);
+  });
+});
+
+describe('splitPrompts', () => {
+  it('takes one prompt per line, trimmed', () => {
+    expect(splitPrompts('a cat\n  a dog  \na bird')).toEqual(['a cat', 'a dog', 'a bird']);
+  });
+
+  it('drops blank and whitespace-only lines', () => {
+    expect(splitPrompts('a cat\n\n   \na dog\n')).toEqual(['a cat', 'a dog']);
+  });
+
+  it('returns nothing for empty input', () => {
+    expect(splitPrompts('')).toEqual([]);
+    expect(splitPrompts('   \n  ')).toEqual([]);
+  });
+});
+
+describe('buildItems, prompts mode', () => {
+  it('makes one item per prompt, numbered and zero-padded', () => {
+    const items = buildItems({ mode: 'prompts', promptsText: 'a cat\na dog', sharedFrame: null });
+    expect(items).toEqual([
+      { prompt: 'a cat', startFrame: null, label: 'Video 1', basename: 'video-01' },
+      { prompt: 'a dog', startFrame: null, label: 'Video 2', basename: 'video-02' },
+    ]);
+  });
+
+  it('gives every item the shared start frame when there is one', () => {
+    const items = buildItems({
+      mode: 'prompts',
+      promptsText: 'a cat\na dog',
+      sharedFrame: { dataUri: 'data:image/png;base64,AAA', name: 'ref.png' },
+    });
+    expect(items.map((i) => i.startFrame)).toEqual([
+      'data:image/png;base64,AAA',
+      'data:image/png;base64,AAA',
+    ]);
+  });
+
+  it('is text-to-video when no frame is given', () => {
+    const items = buildItems({ mode: 'prompts', promptsText: 'a cat', sharedFrame: null });
+    expect(items[0].startFrame).toBeNull();
+  });
+
+  it('pads past nine so filenames sort correctly', () => {
+    const promptsText = Array.from({ length: 11 }, (_, i) => `prompt ${i + 1}`).join('\n');
+    const items = buildItems({ mode: 'prompts', promptsText, sharedFrame: null });
+    expect(items[8].basename).toBe('video-09');
+    expect(items[9].basename).toBe('video-10');
+    expect(items[10].basename).toBe('video-11');
+  });
+});
+
+describe('buildItems, frames mode', () => {
+  const frame = (name) => ({ name, dataUri: `data:image/png;base64,${name}` });
+
+  it('makes one item per frame, all sharing the one prompt', () => {
+    const items = buildItems({
+      mode: 'frames',
+      prompt: '  slow dolly in  ',
+      frames: [frame('a.png'), frame('b.png')],
+    });
+    expect(items.map((i) => i.prompt)).toEqual(['slow dolly in', 'slow dolly in']);
+    expect(items.map((i) => i.startFrame)).toEqual([
+      'data:image/png;base64,a.png',
+      'data:image/png;base64,b.png',
+    ]);
+  });
+
+  it('labels each card with the uploaded filename', () => {
+    const items = buildItems({ mode: 'frames', prompt: 'x', frames: [frame('Shot 3.final.PNG')] });
+    expect(items[0].label).toBe('Shot 3.final.PNG');
+  });
+
+  it('derives a filename-safe stem from the image name', () => {
+    const items = buildItems({ mode: 'frames', prompt: 'x', frames: [frame('Shot 3.final.PNG')] });
+    expect(items[0].basename).toBe('video-01-shot-3-final');
+  });
+
+  it('collapses runs of punctuation and trims the edges', () => {
+    const items = buildItems({
+      mode: 'frames',
+      prompt: 'x',
+      frames: [frame('__My   Weird!! Name__.jpg')],
+    });
+    expect(items[0].basename).toBe('video-01-my-weird-name');
+  });
+
+  it('falls back to the bare number when a name slugs to nothing', () => {
+    const items = buildItems({ mode: 'frames', prompt: 'x', frames: [frame('!!!.png')] });
+    expect(items[0].basename).toBe('video-01');
+  });
+
+  it('truncates a very long stem', () => {
+    const long = 'a'.repeat(80) + '.png';
+    const items = buildItems({ mode: 'frames', prompt: 'x', frames: [frame(long)] });
+    expect(items[0].basename).toBe(`video-01-${'a'.repeat(40)}`);
+  });
+
+  it('returns nothing when no frames were uploaded', () => {
+    expect(buildItems({ mode: 'frames', prompt: 'x', frames: [] })).toEqual([]);
+  });
+});
+
+// The Image Chain Studio's step model. What links two steps is the earlier
+// one's output URL, so most of the chain's logic is picking the right step to
+// carry on from — including when the last one failed.
+describe('the chainable image models', () => {
+  it('lists only the models that take a reference image', () => {
+    expect(CHAIN_MODEL_KEYS.length).toBeGreaterThan(0);
+    CHAIN_MODEL_KEYS.forEach((k) => expect(MODEL_CONFIGS[k].imageField).toBeTruthy());
+  });
+
+  it('leaves out a model that cannot take one', () => {
+    const textOnly = Object.keys(MODEL_CONFIGS).filter((k) => !MODEL_CONFIGS[k].imageField);
+    textOnly.forEach((k) => expect(CHAIN_MODEL_KEYS).not.toContain(k));
+  });
+});
+
+describe('parseStepCount', () => {
+  it('reads a whole number of steps', () => {
+    expect(parseStepCount('4')).toBe(4);
+    expect(parseStepCount(' 12 ')).toBe(12);
+  });
+
+  it('caps a runaway at the maximum', () => {
+    expect(parseStepCount('900')).toBe(MAX_STEPS);
+  });
+
+  it('rejects anything that is not a chain', () => {
+    expect(parseStepCount('0')).toBeNull();
+    expect(parseStepCount('-3')).toBeNull();
+    expect(parseStepCount('')).toBeNull();
+    expect(parseStepCount('abc')).toBeNull();
+    expect(parseStepCount(undefined)).toBeNull();
+  });
+});
+
+describe('chainSource', () => {
+  const step = (index, status, outputUrl = null) => ({
+    id: stepId(index),
+    index,
+    status,
+    outputUrl,
+    label: `Step ${index + 1}`,
+  });
+
+  it('is the newest step that produced an image', () => {
+    const items = [step(0, 'succeeded', 'a.png'), step(1, 'succeeded', 'b.png')];
+    expect(chainSource(items).outputUrl).toBe('b.png');
+  });
+
+  it('skips a failed tail, so an error does not end the chain', () => {
+    const items = [step(0, 'succeeded', 'a.png'), step(1, 'failed'), step(2, 'failed')];
+    expect(chainSource(items).outputUrl).toBe('a.png');
+  });
+
+  it('ignores a step marked succeeded with no image', () => {
+    expect(chainSource([step(0, 'succeeded')])).toBeNull();
+  });
+
+  it('is null for a chain with nothing to continue from', () => {
+    expect(chainSource([])).toBeNull();
+    expect(chainSource([step(0, 'running')])).toBeNull();
+  });
+
+  it('hands a retried step the image it was given before, not a later one', () => {
+    const items = [
+      step(0, 'succeeded', 'a.png'),
+      step(1, 'succeeded', 'b.png'),
+      step(2, 'failed'),
+      step(3, 'succeeded', 'd.png'),
+    ];
+    // Retrying step 3 (index 2) continues from step 2, even though step 4 has
+    // since produced an image of its own.
+    expect(chainSource(items, 2).outputUrl).toBe('b.png');
+    // The first step has nothing before it — it starts the chain.
+    expect(chainSource(items, 0)).toBeNull();
+  });
+
+  it('names the step an image came from, and nothing for the chain start', () => {
+    expect(sourceLabel(step(1, 'succeeded', 'b.png'))).toBe('Step 2');
+    expect(sourceLabel({ index: 4, status: 'succeeded', outputUrl: 'e.png' })).toBe('Step 5');
+    expect(sourceLabel(null)).toBe('');
+  });
+});
+
+describe('nextStepIndex', () => {
+  it('starts a new chain at zero', () => {
+    expect(nextStepIndex([])).toBe(0);
+  });
+
+  it('carries on past every step, failed ones included', () => {
+    const items = [
+      { index: 0, status: 'succeeded' },
+      { index: 1, status: 'failed' },
+      { index: 2, status: 'succeeded' },
+    ];
+    expect(nextStepIndex(items)).toBe(3);
+  });
+
+  it('follows the indexes a recovered chain came back with', () => {
+    expect(nextStepIndex([{ index: 7, status: 'succeeded' }])).toBe(8);
+  });
+});
+
+describe('a step download name', () => {
+  it('is the step number, padded', () => {
+    expect(imageName({ index: 0, basename: 'image-01' })).toBe('image-01.png');
+    expect(imageName({ index: 11, basename: 'image-12' })).toBe('image-12.png');
+  });
+
+  it('falls back to the index when a recovered step has no basename', () => {
+    expect(imageName({ index: 4 })).toBe('image-05.png');
+  });
+});
+
+// Stitching a list of images into one video — a chain, or a batch run's
+// results. Only the parts that are arithmetic are covered — the encoding itself
+// drives WebCodecs and a canvas, which the node test environment has none of,
+// so it is verified in a real browser instead.
+describe('the video frame order', () => {
+  it('is the chain, in order', () => {
+    expect(frameSequence(4, false)).toEqual([0, 1, 2, 3]);
+  });
+
+  it('comes back down the chain when looping, without repeating either end', () => {
+    // 1,2,3,4,3,2 — the player's own loop supplies the return to image 1, so it
+    // is not held twice at the seam.
+    expect(frameSequence(4, true)).toEqual([0, 1, 2, 3, 2, 1]);
+  });
+
+  it('has nothing to loop through with fewer than three images', () => {
+    expect(frameSequence(2, true)).toEqual([0, 1]);
+    expect(frameSequence(1, true)).toEqual([0]);
+    expect(frameSequence(0, true)).toEqual([]);
+  });
+
+  it('gives a looped video very nearly twice the length', () => {
+    expect(totalDurationMs(4, 200, false)).toBe(800);
+    expect(totalDurationMs(4, 200, true)).toBe(1200);
+    expect(totalDurationMs(1, 200, false)).toBe(200);
+  });
+});
+
+describe('parseDurationMs', () => {
+  it('reads a whole number of milliseconds', () => {
+    expect(parseDurationMs('200')).toBe(200);
+    expect(parseDurationMs(' 40 ')).toBe(40);
+    expect(parseDurationMs(String(DEFAULT_MS_PER_IMAGE))).toBe(DEFAULT_MS_PER_IMAGE);
+  });
+
+  it('caps a very long hold', () => {
+    expect(parseDurationMs('999999')).toBe(MAX_MS_PER_IMAGE);
+  });
+
+  it('rejects anything under a frame or not a number', () => {
+    expect(parseDurationMs(String(MIN_MS_PER_IMAGE - 1))).toBeNull();
+    expect(parseDurationMs('0')).toBeNull();
+    expect(parseDurationMs('-100')).toBeNull();
+    expect(parseDurationMs('')).toBeNull();
+    expect(parseDurationMs('soon')).toBeNull();
+  });
+});
+
+// The tools sidebar lists what the UI offers; server/routes.js is the source of
+// truth for what exists. They are two lists, so this is what stops them
+// drifting into a dead link.
+describe('the tools in the navigation', () => {
+  it('all point at a real route', () => {
+    const paths = routes.map((r) => r.path);
+    TOOLS.forEach((tool) => expect(paths).toContain(tool.path));
+  });
+
+  it('leaves out the unlisted Chat Box Studio', () => {
+    expect(TOOLS.map((t) => t.path)).not.toContain('/prompt');
+  });
+
+  it('gives every tool a name and a line about it', () => {
+    TOOLS.forEach((tool) => {
+      expect(tool.label).toBeTruthy();
+      expect(tool.blurb).toBeTruthy();
+    });
+  });
+
+  it('names the tool at a path, and nothing at an unknown one', () => {
+    expect(toolLabel('/image-chain')).toBe('Image Chain');
+    expect(toolLabel('/prompt')).toBe('');
+  });
+});
+
+// Keeping results after Replicate deletes them (an hour after they are made).
+// The IndexedDB side needs a browser and is verified there; what is arithmetic
+// — the keys, and what gets evicted when the store is full — is covered here.
+describe('the output cache keys', () => {
+  it('namespace a run and its items', () => {
+    expect(cacheKey('imageChainStudio', 'run-1', 'step-2')).toBe('imageChainStudio/run-1/step-2');
+  });
+
+  it('can be traced back to their run', () => {
+    expect(keyRun('imageChainStudio/run-1/step-2')).toBe('imageChainStudio/run-1');
+  });
+
+  it('keep two tools apart at the same item id', () => {
+    expect(cacheKey('batchImageStudio', 'run-1', 'r1')).not.toBe(
+      cacheKey('batchVideoStudio', 'run-1', 'r1')
+    );
+  });
+
+  it('reports whether this environment can cache at all', () => {
+    // Node has no IndexedDB, so every caller must cope with it being absent.
+    expect(cacheSupported()).toBe(false);
+  });
+});
+
+describe('planEviction', () => {
+  const entry = (key, bytes, savedAt) => ({ key, bytes, savedAt });
+
+  it('keeps everything while there is room', () => {
+    expect(planEviction([entry('a', 10, 1), entry('b', 10, 2)], 100)).toEqual([]);
+  });
+
+  it('drops the oldest first, and only as many as it takes', () => {
+    const entries = [entry('old', 40, 1), entry('mid', 40, 2), entry('new', 40, 3)];
+    expect(planEviction(entries, 100)).toEqual(['old']);
+  });
+
+  it('keeps dropping until it is under the cap', () => {
+    const entries = [entry('old', 40, 1), entry('mid', 40, 2), entry('new', 40, 3)];
+    expect(planEviction(entries, 50)).toEqual(['old', 'mid']);
+  });
+
+  it('handles an entry that never recorded its size', () => {
+    expect(planEviction([entry('a', undefined, 1), entry('b', 10, 2)], 5)).toEqual(['a', 'b']);
+  });
+
+  it('has a default cap in the hundreds of megabytes', () => {
+    expect(MAX_BYTES).toBeGreaterThan(100 * 1024 * 1024);
+  });
+});
+
+describe('formatBytes', () => {
+  it('reads as megabytes, with kilobytes for the small stuff', () => {
+    expect(formatBytes(0)).toBe('0 MB');
+    expect(formatBytes(2 * 1024 * 1024)).toBe('2.0 MB');
+    expect(formatBytes(400 * 1024)).toBe('400 KB');
+    expect(formatBytes(250 * 1024 * 1024)).toBe('250 MB');
+  });
+});
+
+// The Chat Box Studio's arithmetic: what the recording's timeline looks like at
+// a given millisecond, and the frame it is painted into. The painting and the
+// encoding themselves need a canvas and WebCodecs, so they are verified in a
+// browser (see AGENTS.md) — this is the part that can be pinned down here.
+describe('the chat box recording timeline', () => {
+  const plan = (over) => planRecording({ text: 'hello', cps: 10, seed: 3, ...over });
+
+  it('adds up the four stretches of the recording', () => {
+    const p = plan({ startDelayMs: 500, pauseBeforeSendMs: 300, waitAfterSendMs: 2000 });
+    expect(p.typingStartMs).toBe(500);
+    expect(p.sendAtMs).toBeCloseTo(500 + p.typingMs + 300, 5);
+    expect(p.totalMs).toBeCloseTo(p.sendAtMs + 2000, 5);
+  });
+
+  it('types at about the speed it was asked for', () => {
+    const text = 'a'.repeat(60); // no punctuation, so nothing pauses
+    const p = planRecording({ text, cps: 20, startDelayMs: 0, seed: 1 });
+    // 60 characters at 20 a second is three seconds, give or take the jitter.
+    expect(p.typingMs).toBeGreaterThan(2600);
+    expect(p.typingMs).toBeLessThan(3400);
+  });
+
+  it('is the same recording every time, for the same settings', () => {
+    expect(keystrokeTimes('hello there', 12, 7)).toEqual(keystrokeTimes('hello there', 12, 7));
+    expect(keystrokeTimes('hello there', 12, 7)).not.toEqual(keystrokeTimes('hello there', 12, 8));
+  });
+
+  it('breathes at a full stop', () => {
+    const [a, b] = [keystrokeTimes('ab', 10, 1), keystrokeTimes('a.b', 10, 1)];
+    // The third character lands later than the second when a full stop is in
+    // the way, even though it is only one character further along.
+    expect(b[2] - b[1]).toBeGreaterThan(a[1] - a[0]);
+  });
+
+  it('shows an empty box before it starts, and the whole message at the send', () => {
+    const p = plan({ startDelayMs: 500 });
+    expect(stateAt(0, p)).toMatchObject({ charCount: 0, phase: 'idle', sending: false });
+    expect(stateAt(p.sendAtMs, p)).toMatchObject({
+      text: 'hello',
+      phase: 'sending',
+      sending: true,
+    });
+    expect(stateAt(p.totalMs, p).sending).toBe(true);
+  });
+
+  it('never un-types a character', () => {
+    const p = plan({});
+    let last = 0;
+    for (let ms = 0; ms <= p.totalMs; ms += 16) {
+      const { charCount } = stateAt(ms, p);
+      expect(charCount).toBeGreaterThanOrEqual(last);
+      last = charCount;
+    }
+    expect(last).toBe(5);
+  });
+
+  it('holds the caret solid while typing, and drops it at the send', () => {
+    const p = plan({ startDelayMs: 0 });
+    expect(stateAt(p.typingMs / 2, p).caretOn).toBe(true);
+    expect(stateAt(p.sendAtMs + 100, p).caretOn).toBe(false);
+  });
+
+  it('counts the frames the encoder will be asked for', () => {
+    const p = planRecording({
+      text: 'hi',
+      cps: 10,
+      fps: 30,
+      startDelayMs: 0,
+      pauseBeforeSendMs: 0,
+      waitAfterSendMs: 1000,
+    });
+    expect(p.frameCount).toBe(Math.round((p.totalMs / 1000) * 30));
+  });
+
+  it('clamps a settings box that is empty, silly or not a number', () => {
+    expect(clampSetting('', LIMITS.cps, DEFAULTS.cps)).toBe(DEFAULTS.cps);
+    expect(clampSetting('abc', LIMITS.cps, DEFAULTS.cps)).toBe(DEFAULTS.cps);
+    expect(clampSetting('-4', LIMITS.cps, DEFAULTS.cps)).toBe(LIMITS.cps[0]);
+    expect(clampSetting('900', LIMITS.cps, DEFAULTS.cps)).toBe(LIMITS.cps[1]);
+    expect(clampSetting('18', LIMITS.cps, DEFAULTS.cps)).toBe(18);
+  });
+});
+
+describe('the chat box recording frame', () => {
+  it('keeps a resolution even — H.264 will not take an odd one', () => {
+    expect(parseSize('1081', 1080)).toBe(1080);
+    expect(parseSize('1080', 1080)).toBe(1080);
+  });
+
+  it('falls back and clamps rather than trusting the box', () => {
+    expect(parseSize('', 1080)).toBe(1080);
+    expect(parseSize('nope', 720)).toBe(720);
+    expect(parseSize('10', 1080)).toBe(SIZE_LIMITS[0]);
+    expect(parseSize('99999', 1080)).toBe(SIZE_LIMITS[1]);
+  });
+
+  it('offers the shapes a reel is cut to', () => {
+    expect(RESOLUTION_PRESETS.some((p) => p.width === 1080 && p.height === 1920)).toBe(true);
+    RESOLUTION_PRESETS.forEach((p) => {
+      expect(p.width % 2).toBe(0);
+      expect(p.height % 2).toBe(0);
+    });
+  });
+
+  it('draws a phone-sized layout big enough to fill the frame', () => {
+    // The whole point of the layout width: a 1080-wide reel of a 400-wide
+    // screen is drawn at 2.7×, so the text in it is as big as it is on a phone.
+    expect(sceneScale(1080, 400)).toBeCloseTo(2.7, 5);
+    expect(sceneScale(1080, 860)).toBeCloseTo(1.256, 3);
+    expect(DEFAULT_LAYOUT_WIDTH).toBeLessThanOrEqual(430); // a phone, not a window
+  });
+
+  it('gives the box its share of that screen, not of the frame', () => {
+    expect(boxCssWidth(400, 90)).toBe(360);
+    expect(boxCssWidth(400, 100)).toBe(400);
+    // …and the two together put it at the same fraction of the frame.
+    expect(boxCssWidth(400, 90) * sceneScale(1080, 400)).toBeCloseTo(1080 * 0.9, 5);
+  });
+
+  it('opens on a composer that nearly fills the screen it is on', () => {
+    expect(DEFAULT_BOX_WIDTH_PCT).toBeGreaterThanOrEqual(85);
+  });
+
+  it('names the download after the frame, and the file after its container', () => {
+    expect(recordingBasename(1080, 1920)).toBe('karmalab-chat-box-1080x1920');
+    expect(extensionForType('video/webm')).toBe('webm');
+    expect(extensionForType('video/mp4')).toBe('mp4');
+    expect(extensionForType(undefined)).toBe('mp4');
+  });
+});
+
+// The images landing in the box before the typing starts: when each one is
+// there, and what that does to the rest of the timeline.
+describe('the images a recording drops in', () => {
+  const plan = (over) =>
+    planRecording({
+      text: 'hi',
+      cps: 10,
+      seed: 2,
+      startDelayMs: 400,
+      attachIntervalMs: 500,
+      pauseBeforeSendMs: 0,
+      waitAfterSendMs: 0,
+      ...over,
+    });
+
+  it('lands them one after another, starting after the opening beat', () => {
+    expect(plan({ attachCount: 3 }).attachTimes).toEqual([400, 900, 1400]);
+  });
+
+  it('holds the typing back until one beat after the last of them', () => {
+    expect(plan({ attachCount: 0 }).typingStartMs).toBe(400);
+    expect(plan({ attachCount: 3 }).typingStartMs).toBe(1900);
+  });
+
+  it('pushes the send and the whole video back by the same amount', () => {
+    const none = plan({ attachCount: 0 });
+    const three = plan({ attachCount: 3 });
+    expect(three.sendAtMs - none.sendAtMs).toBe(1500);
+    expect(three.totalMs - none.totalMs).toBe(1500);
+  });
+
+  it('puts them in the box one at a time, never before their moment', () => {
+    const p = plan({ attachCount: 2 });
+    expect(stateAt(0, p)).toMatchObject({ attachCount: 0, phase: 'idle' });
+    expect(stateAt(399, p).attachCount).toBe(0);
+    expect(stateAt(400, p)).toMatchObject({ attachCount: 1, phase: 'attaching' });
+    expect(stateAt(900, p).attachCount).toBe(2);
+    expect(stateAt(p.totalMs, p).attachCount).toBe(2);
+  });
+
+  it('reports how far the newest one is into landing', () => {
+    const p = plan({ attachCount: 1 });
+    expect(stateAt(399, p).dropProgress).toBe(1); // nothing landed yet
+    expect(stateAt(400, p).dropProgress).toBe(0);
+    expect(stateAt(400 + DROP_MS / 2, p).dropProgress).toBeCloseTo(0.5, 5);
+    expect(stateAt(400 + DROP_MS * 2, p).dropProgress).toBe(1);
+  });
+});
+
+// The typing sound: where it is heard, which clip plays there, and what the
+// track it renders to looks like.
+describe('the typing sound', () => {
+  const plan = planRecording({
+    text: 'hello there',
+    cps: 10,
+    seed: 5,
+    startDelayMs: 1000,
+    pauseBeforeSendMs: 800,
+    waitAfterSendMs: 2000,
+  });
+  // Two clips, as decodeClip would hand them over: half a second of room tone
+  // before the first keystroke in one of them.
+  const clip = (durationMs, leadMs) => ({
+    samples: new Float32Array(Math.round((durationMs / 1000) * 1000)).fill(1),
+    sampleRate: 1000,
+    durationMs,
+    leadMs,
+    usableMs: durationMs - leadMs,
+    keystrokes: 8,
+  });
+
+  it('is heard only while characters are landing', () => {
+    const runs = typingRuns(plan);
+    expect(runs.length).toBeGreaterThan(0);
+    runs.forEach((run) => {
+      expect(run.startMs).toBeGreaterThanOrEqual(plan.typingStartMs);
+      expect(run.endMs).toBeLessThanOrEqual(plan.sendAtMs);
+      expect(run.endMs).toBeGreaterThan(run.startMs);
+    });
+  });
+
+  it('is silent before the typing and from the send onwards', () => {
+    const runs = typingRuns(plan);
+    const heardAt = (ms) => runs.some((r) => ms >= r.startMs && ms < r.endMs);
+    expect(heardAt(0)).toBe(false);
+    expect(heardAt(plan.typingStartMs - 1)).toBe(false);
+    // Silent right up to the first character, not from the moment the typing
+    // window opens — nothing has been pressed yet.
+    expect(heardAt(plan.typingStartMs)).toBe(false);
+    expect(heardAt(plan.typingStartMs + plan.times[0] + 1)).toBe(true);
+    expect(heardAt(plan.sendAtMs + 1)).toBe(false);
+    expect(heardAt(plan.totalMs - 1)).toBe(false);
+  });
+
+  it('runs two keystrokes together rather than gating each one', () => {
+    // At 10 characters a second the gap is ~100ms — inside the tail, so a burst
+    // of typing is one run of sound, not a stutter.
+    expect(typingRuns(plan).length).toBeLessThan(plan.times.length);
+  });
+
+  it('breaks the run at a pause longer than the tail', () => {
+    const slow = planRecording({ text: 'ab', cps: 2, seed: 1, startDelayMs: 0 });
+    const runs = typingRuns(slow);
+    expect(runs.length).toBe(2);
+    expect(runs[0].endMs - runs[0].startMs).toBeCloseTo(RUN_TAIL_MS, 5);
+  });
+
+  it('stops a beat after the last character rather than ringing on', () => {
+    const runs = typingRuns(plan);
+    const lastKeystroke = plan.typingStartMs + plan.times[plan.times.length - 1];
+    expect(runs[runs.length - 1].endMs - lastKeystroke).toBeLessThanOrEqual(RUN_TAIL_MS);
+  });
+
+  it('plays every clip from its own first keystroke, never its silence', () => {
+    const clips = [clip(800, 500), clip(800, 0)];
+    const { segments } = arrangeClips([{ startMs: 0, endMs: 600 }], clips, () => 0);
+    expect(segments[0].offsetMs).toBe(clips[segments[0].clip].leadMs);
+  });
+
+  it('fills a long run with more clips, and cuts the last one when it ends', () => {
+    const clips = [clip(400, 0), clip(400, 0), clip(400, 0)];
+    const { segments } = arrangeClips([{ startMs: 100, endMs: 1000 }], clips, () => 0);
+    expect(segments.length).toBe(3);
+    expect(segments[0].atMs).toBe(100);
+    expect(segments[1].atMs).toBe(500);
+    expect(segments[2].durationMs).toBe(100); // cut at the end of the run
+    const last = segments[segments.length - 1];
+    expect(last.atMs + last.durationMs).toBe(1000);
+  });
+
+  it('picks a different clip each time before repeating any', () => {
+    const clips = [clip(300, 0), clip(300, 0), clip(300, 0)];
+    const { segments, wrapped } = arrangeClips([{ startMs: 0, endMs: 900 }], clips, () => 0);
+    expect(new Set(segments.map((s) => s.clip)).size).toBe(3);
+    expect(wrapped).toBe(false);
+  });
+
+  it('says so when the typing outlasts every clip it has', () => {
+    const clips = [clip(300, 0)];
+    const { wrapped } = arrangeClips([{ startMs: 0, endMs: 900 }], clips, () => 0);
+    expect(wrapped).toBe(true);
+  });
+
+  it('lays the clips into silence, and fades their edges', () => {
+    const clips = [{ samples: new Float32Array(1000).fill(1), sampleRate: 1000 }];
+    const track = renderTrack(
+      clips,
+      [{ atMs: 50, clip: 0, offsetMs: 0, durationMs: 50 }],
+      200,
+      1000
+    );
+    expect(track.length).toBe(200);
+    expect(track[0]).toBe(0); // before the segment
+    expect(track[199]).toBe(0); // after it
+    expect(track[75]).toBeCloseTo(1, 5); // the middle of it, at full level
+    expect(track[50]).toBeLessThan(1); // faded in
+  });
+
+  it('finds the keystrokes in a clip, and where its typing starts', () => {
+    // Half a second of near-silence, then three clicks 200ms apart.
+    const rate = 1000;
+    const samples = new Float32Array(1500).fill(0.001);
+    [500, 700, 900].forEach((at) => {
+      for (let i = 0; i < 20; i++) samples[at + i] = 0.8;
+    });
+    const onsets = findOnsets(rmsEnvelope(samples, rate));
+    expect(onsets).toEqual([500, 700, 900]);
+    const timing = clipTiming(samples, rate);
+    expect(timing.leadMs).toBeLessThan(500);
+    expect(timing.leadMs).toBeGreaterThan(480);
+    expect(timing.keystrokes).toBe(3);
+    expect(timing.usableMs).toBeCloseTo(1500 - timing.leadMs, 5);
+  });
+
+  it('has nothing to play when there is nothing to type', () => {
+    expect(typingRuns(planRecording({ text: '' }))).toEqual([]);
+    expect(arrangeClips([], [clip(300, 0)]).segments).toEqual([]);
+  });
+
+  it('merges keystrokes closer together than the gap it allows', () => {
+    expect(MERGE_GAP_MS).toBeLessThan(RUN_TAIL_MS);
+  });
+});
+
+// The chat box is drawn twice — as DOM in ChatBox.jsx and on a canvas in
+// scene.js — and the video is only the box on screen for as long as the two
+// agree about its sizes. They agree by both reading METRICS, and this is what
+// stops a size being typed into the markup instead, which is how a restyled box
+// and an unchanged recording happened once already.
+describe('the chat box and its painter', () => {
+  const source = readFileSync(new URL('../src/apps/chatBox/ChatBox.jsx', import.meta.url), 'utf8');
+
+  it('has no pixel sizes written into the markup', () => {
+    // Comments are allowed to talk about sizes; the markup is not.
+    const code = source.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
+    // Tailwind arbitrary values in px — `pl-[22px]`, `text-[19px]`, `w-[56px]`.
+    const hardcoded = code.match(/\[\d+(\.\d+)?px\]/g) || [];
+    // The drop overlay's hairline border is the one exception: it is a border
+    // style rather than a metric the canvas has to match.
+    expect(hardcoded.filter((v) => v !== '[1.5px]')).toEqual([]);
+  });
+
+  it('takes its sizes from METRICS', () => {
+    expect(source).toContain("from './design.js'");
+    ['padLeft', 'padRight', 'radius', 'fontSize', 'thumb', 'control'].forEach((key) => {
+      expect(source).toContain(`m.${key}`);
+    });
+  });
+
+  it('has a metric for everything the painter draws', () => {
+    // A number the canvas multiplies by the scale has to exist here, or the
+    // painter would be scaling `undefined`.
+    [
+      'radius',
+      'padTop',
+      'padRight',
+      'padBottom',
+      'padLeft',
+      'gap',
+      'fontSize',
+      'lineHeight',
+      'minTextHeight',
+      'maxTextLines',
+      'caretWidth',
+      'thumb',
+      'thumbRadius',
+      'thumbGap',
+      'control',
+      'pillRadius',
+      'chipFontSize',
+      'chipRadius',
+      'chipPadX',
+      'chipGap',
+      'pillPadLeft',
+      'pillPadRight',
+      'pillGap',
+      'iconSize',
+      'sendIconSize',
+      'chevronSize',
+      'headlineFontSize',
+      'headlineGap',
+      'shadowBlur',
+      'shadowOffsetY',
+    ].forEach((key) => {
+      expect(Number.isFinite(METRICS[key])).toBe(true);
+    });
+  });
+});

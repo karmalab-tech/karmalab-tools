@@ -63,16 +63,21 @@ export async function createMp4FrameSource(file) {
   const mp4 = createFile();
   let info = null;
   let parseError = null;
-  mp4.onReady = (i) => { info = i; };
-  mp4.onError = (module, message) => { parseError = new Error(`MP4 parse error: ${message}`); };
+  mp4.onReady = (i) => {
+    info = i;
+  };
+  mp4.onError = (module, message) => {
+    parseError = new Error(`MP4 parse error: ${message}`);
+  };
 
   // Wake everything waiting on demux/decode progress.
   let waiters = [];
   const poke = () => waiters.splice(0).forEach((r) => r());
-  const wait = () => Promise.race([
-    new Promise((r) => waiters.push(r)),
-    new Promise((r) => setTimeout(r, 25)), // safety valve against missed pokes
-  ]);
+  const wait = () =>
+    Promise.race([
+      new Promise((r) => waiters.push(r)),
+      new Promise((r) => setTimeout(r, 25)), // safety valve against missed pokes
+    ]);
 
   const videoSamples = [];
   const audioSamples = [];
@@ -108,7 +113,8 @@ export async function createMp4FrameSource(file) {
     throw new Error(`This browser cannot decode ${vTrack.codec} via WebCodecs.`);
   }
 
-  const duration = (vTrack.movie_duration || info.duration) / (vTrack.movie_timescale || info.timescale);
+  const duration =
+    (vTrack.movie_duration || info.duration) / (vTrack.movie_timescale || info.timescale);
   const frameCount = vTrack.nb_samples;
   const fps = frameCount / (vTrack.duration / vTrack.timescale || duration || 1);
 
@@ -148,7 +154,11 @@ export async function createMp4FrameSource(file) {
   // re-append media data from the position it asks for (for faststart files,
   // right where the samples begin).
   let pumpOffset = 0;
-  try { pumpOffset = mp4.seek(0, true).offset || 0; } catch { pumpOffset = 0; }
+  try {
+    pumpOffset = mp4.seek(0, true).offset || 0;
+  } catch {
+    pumpOffset = 0;
+  }
 
   // Phase 2: append in the background, pausing while the queue is deep.
   let stopPump = false;
@@ -199,8 +209,14 @@ export async function createMp4FrameSource(file) {
     const out = [];
     let decodeError = null;
     const decoder = new VideoDecoder({
-      output: (f) => { out.push(f); poke(); },
-      error: (e) => { decodeError = e; poke(); },
+      output: (f) => {
+        out.push(f);
+        poke();
+      },
+      error: (e) => {
+        decodeError = e;
+        poke();
+      },
     });
     decoder.configure(decoderConfig);
     let flushed = false;
@@ -212,24 +228,37 @@ export async function createMp4FrameSource(file) {
         // Feed while the decoder has room and we're not sitting on many outputs.
         while (videoSamples.length && decoder.decodeQueueSize < 16 && out.length < 8) {
           const s = videoSamples.shift();
-          decoder.decode(new EncodedVideoChunk({
-            type: s.is_sync ? 'key' : 'delta',
-            timestamp: Math.round((s.cts * 1e6) / vTimescale),
-            duration: Math.round((s.duration * 1e6) / vTimescale),
-            data: s.data,
-          }));
+          decoder.decode(
+            new EncodedVideoChunk({
+              type: s.is_sync ? 'key' : 'delta',
+              timestamp: Math.round((s.cts * 1e6) / vTimescale),
+              duration: Math.round((s.duration * 1e6) / vTimescale),
+              data: s.data,
+            })
+          );
           poke(); // the pump may be waiting for the sample queue to drain
         }
-        if (out.length) { yield orient(out.shift()); continue; }
+        if (out.length) {
+          yield orient(out.shift());
+          continue;
+        }
         if (pumpDone && !videoSamples.length && !decodeError) {
-          if (!flushed) { flushed = true; await decoder.flush().catch(() => {}); continue; }
+          if (!flushed) {
+            flushed = true;
+            await decoder.flush().catch(() => {});
+            continue;
+          }
           if (!out.length) break;
         }
         await wait();
       }
     } finally {
       out.forEach((f) => f.close());
-      try { decoder.close(); } catch { /* already closed */ }
+      try {
+        decoder.close();
+      } catch {
+        /* already closed */
+      }
     }
   }
 
@@ -245,6 +274,9 @@ export async function createMp4FrameSource(file) {
     frames,
     // Audio samples finish collecting when the whole file has been demuxed.
     waitDemuxDone: () => pump,
-    close() { stopPump = true; poke(); },
+    close() {
+      stopPump = true;
+      poke();
+    },
   };
 }

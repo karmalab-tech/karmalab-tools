@@ -14,6 +14,18 @@ export const routes = [
     description: 'Generate one image per prompt in batch via Replicate.',
   },
   {
+    path: '/image-chain',
+    file: 'image-chain.html',
+    title: 'Image Chain Studio',
+    description: 'Chain images — each step is generated from the previous one as its reference.',
+  },
+  {
+    path: '/batch-videos',
+    file: 'batch-videos.html',
+    title: 'Batch Video Studio',
+    description: 'Generate a batch of videos — one per prompt, or one per start frame.',
+  },
+  {
     path: '/video-chain',
     file: 'video-chain.html',
     title: 'Continuous Video Studio',
@@ -28,8 +40,7 @@ export const routes = [
   {
     path: '/prompt',
     file: 'prompt.html',
-    title: 'Prompt Box',
-    description: 'Hi Karma prompt box mockup.',
+    title: 'Chat Box Studio',
+    description: 'Record the chat box typing a message, as a video, at any resolution.',
   },
 ];
-

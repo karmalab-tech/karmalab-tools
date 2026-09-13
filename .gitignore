@@ -9,7 +9,7 @@ node_modules/
 .pnp.*
 yarn-error.log
 
-# Build output (for the future React/Tailwind/Vite migration)
+# Build output
 dist/
 build/
 .vite/

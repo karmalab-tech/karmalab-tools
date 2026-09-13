@@ -1,9 +1,10 @@
 import { useEffect } from 'react';
 
 // While `active`, closing / reloading the tab triggers the browser's native
-// "leave site?" confirmation. Used by the tools while a generation run is in
-// progress, since in-memory results (and the frame chain in the video tool)
-// would be lost with the tab.
+// "leave site?" confirmation. Driven by useGenerationRun while a generation has
+// anything in flight: the prediction survives the tab, but the polling that
+// tracks it does not — and in the video chain, neither does the frame that links
+// one clip to the next.
 export function useUnloadGuard(active) {
   useEffect(() => {
     if (!active) return;

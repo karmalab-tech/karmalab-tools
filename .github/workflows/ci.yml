@@ -1,0 +1,43 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# Nothing here needs to write to the repo.
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    name: Lint, test and build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: yarn
+
+      # Fail on a lockfile that doesn't match package.json, rather than
+      # silently resolving fresh versions.
+      - name: Install
+        run: yarn install --frozen-lockfile
+
+      - name: Lint
+        run: yarn lint --max-warnings 0
+
+      - name: Check formatting
+        run: yarn format:check
+
+      - name: Test
+        run: yarn test
+
+      - name: Build
+        run: yarn build

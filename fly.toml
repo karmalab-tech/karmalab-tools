@@ -1,9 +1,17 @@
-# fly.toml app configuration file generated for tools-9dc2aw on 2026-07-06T12:11:14Z
+# fly.io configuration for KarmaLab Tools.
 #
-# See https://fly.io/docs/reference/configuration/ for information about how to use this file.
+# Deploys automatically via .github/workflows/deploy.yml on push to main,
+# using a deploy token stored as the FLY_API_TOKEN repo secret. The `app`
+# name itself isn't set here — the workflow passes it via `flyctl deploy
+# --app`, sourced from the FLY_APP_NAME repo secret, so it doesn't appear in
+# repo code. To deploy locally, pass it yourself: `fly deploy --app <name>`.
+#
+# A fork needs its own fly.io app: run `fly apps create`, then set its own
+# FLY_API_TOKEN (`fly tokens create deploy`) and FLY_APP_NAME secrets.
+#
+# See https://fly.io/docs/reference/configuration/ for the full reference.
 #
 
-app = 'tools-9dc2aw'
 primary_region = 'cdg'
 
 [build]

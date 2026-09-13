@@ -30,6 +30,8 @@ export const STATUS_PILL = {
   running: 'text-accent border-accent bg-accent-dim',
   succeeded: 'text-success border-success bg-success-dim',
   failed: 'text-error border-error bg-error-dim',
+  // Whole-run status only (the history list): some items landed, some failed.
+  partial: 'text-warning border-warning bg-warning-dim',
 };
 
 export const MINI_BTN =

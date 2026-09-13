@@ -146,7 +146,9 @@ function VideoDrop({ onFile }) {
       }}
     >
       <div className="font-mono text-[13px] text-text">Drop a video file here</div>
-      <div className="font-mono text-[11.5px] text-text-dim">or click to browse — it never leaves your browser</div>
+      <div className="font-mono text-[11.5px] text-text-dim">
+        or click to browse — it never leaves your browser
+      </div>
       <input
         ref={inputRef}
         type="file"
@@ -409,7 +411,8 @@ export default function VideoEffects() {
     };
     const onTime = () => {
       const t = v.currentTime;
-      if (t < last - 0.2) stop(); // looped back to the start — one pass done
+      if (t < last - 0.2)
+        stop(); // looped back to the start — one pass done
       else {
         last = t;
         setRecPct(Math.min(99, Math.round((t / duration) * 100)));
@@ -600,7 +603,9 @@ export default function VideoEffects() {
                       }}
                       title={on ? `Turn ${e.name} off` : `Turn ${e.name} on`}
                       className={`absolute top-1.5 right-1.5 w-8 h-4.5 rounded-full border cursor-pointer transition-colors duration-150 ${
-                        on ? 'bg-accent border-accent' : 'bg-black/70 border-panel-border hover:border-accent'
+                        on
+                          ? 'bg-accent border-accent'
+                          : 'bg-black/70 border-panel-border hover:border-accent'
                       }`}
                     >
                       <span

@@ -43,8 +43,14 @@ export async function createSeekFrameSource(file, { fps = 30 } = {}) {
         const t = Math.min(i / fps, Math.max(duration - 0.001, 0));
         await new Promise((resolve, reject) => {
           const timer = setTimeout(resolve, 2000); // some seeks never fire 'seeked'
-          video.onseeked = () => { clearTimeout(timer); resolve(); };
-          video.onerror = () => { clearTimeout(timer); reject(new Error('Seeking the video failed.')); };
+          video.onseeked = () => {
+            clearTimeout(timer);
+            resolve();
+          };
+          video.onerror = () => {
+            clearTimeout(timer);
+            reject(new Error('Seeking the video failed.'));
+          };
           video.currentTime = t;
         });
         yield new VideoFrame(video, {

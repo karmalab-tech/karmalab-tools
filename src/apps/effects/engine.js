@@ -400,7 +400,7 @@ export class EffectEngine {
     }
     this.chainFlip ^= 1;
     let t = this.chainTargets[this.chainFlip];
-    if (t.texture === inputTex) t = this.chainTargets[this.chainFlip ^= 1];
+    if (t.texture === inputTex) t = this.chainTargets[(this.chainFlip ^= 1)];
     return t;
   }
 
@@ -549,10 +549,7 @@ export class EffectEngine {
         ...this.floatTargetOpts(),
         filter: this.floatLinearOk ? gl.LINEAR : gl.NEAREST,
       };
-      fx.sim = [
-        createTarget(gl, SIM_RES, SIM_RES, opts),
-        createTarget(gl, SIM_RES, SIM_RES, opts),
-      ];
+      fx.sim = [createTarget(gl, SIM_RES, SIM_RES, opts), createTarget(gl, SIM_RES, SIM_RES, opts)];
       fx.resetNeeded = true;
     }
     const simRec = recs.sim;

@@ -17,7 +17,9 @@ export default defineConfig({
       input: {
         index: 'index.html',
         prompt: 'prompt.html',
+        'image-chain': 'image-chain.html',
         'video-chain': 'video-chain.html',
+        'batch-videos': 'batch-videos.html',
         'video-effects': 'video-effects.html',
       },
     },
@@ -30,5 +32,13 @@ export default defineConfig({
         changeOrigin: true,
       },
     },
+  },
+  // Vitest. Nothing under test needs a DOM — the browser globals the modules
+  // touch (`localStorage`, `fetch`) are stubbed per test — so the node
+  // environment is enough. src/apps/video/frames.js is deliberately uncovered:
+  // it drives a real <video> and canvas, which jsdom cannot decode.
+  test: {
+    environment: 'node',
+    include: ['test/**/*.test.js'],
   },
 });

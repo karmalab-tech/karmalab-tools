@@ -23,9 +23,13 @@ export async function createMp4Sink({ width, height, fps, bitrate, audio }) {
     const cfg = { codec: c.codec, width, height, bitrate: rate, framerate: fps };
     if (c.mux === 'avc') cfg.avc = { format: 'avc' }; // length-prefixed, as MP4 wants
     const s = await VideoEncoder.isConfigSupported(cfg).catch(() => null);
-    if (s?.supported) { chosen = { ...c, cfg }; break; }
+    if (s?.supported) {
+      chosen = { ...c, cfg };
+      break;
+    }
   }
-  if (!chosen) throw new Error('No MP4 video encoder (H.264/VP9/AV1) is supported by this browser.');
+  if (!chosen)
+    throw new Error('No MP4 video encoder (H.264/VP9/AV1) is supported by this browser.');
 
   const target = new ArrayBufferTarget();
   const muxer = new Muxer({
@@ -64,7 +68,9 @@ export async function createMp4Sink({ width, height, fps, bitrate, audio }) {
         encodeError = encodeError || e;
       }
     },
-    error: (e) => { encodeError = encodeError || e; },
+    error: (e) => {
+      encodeError = encodeError || e;
+    },
   });
   encoder.configure(chosen.cfg);
 
@@ -76,7 +82,10 @@ export async function createMp4Sink({ width, height, fps, bitrate, audio }) {
 
     // Encodes and closes the frame. Awaits when the encoder queue is deep.
     async addFrame(frame) {
-      if (encodeError) { frame.close(); throw encodeError; }
+      if (encodeError) {
+        frame.close();
+        throw encodeError;
+      }
       while (encoder.encodeQueueSize > 8) await new Promise((r) => setTimeout(r, 4));
       encoder.encode(frame, { keyFrame: added % gop === 0 });
       added++;
@@ -87,16 +96,17 @@ export async function createMp4Sink({ width, height, fps, bitrate, audio }) {
     addRawAudio(track) {
       let first = true;
       for (const s of track.samples) {
-        const meta = first && track.description
-          ? {
-              decoderConfig: {
-                codec: track.codec,
-                sampleRate: track.sampleRate,
-                numberOfChannels: track.numberOfChannels,
-                description: track.description,
-              },
-            }
-          : undefined;
+        const meta =
+          first && track.description
+            ? {
+                decoderConfig: {
+                  codec: track.codec,
+                  sampleRate: track.sampleRate,
+                  numberOfChannels: track.numberOfChannels,
+                  description: track.description,
+                },
+              }
+            : undefined;
         muxer.addAudioChunkRaw(
           s.data,
           s.is_sync ? 'key' : 'delta',
@@ -118,7 +128,11 @@ export async function createMp4Sink({ width, height, fps, bitrate, audio }) {
     },
 
     abort() {
-      try { encoder.close(); } catch { /* already closed */ }
+      try {
+        encoder.close();
+      } catch {
+        /* already closed */
+      }
     },
   };
 }
