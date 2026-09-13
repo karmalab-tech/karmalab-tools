@@ -89,8 +89,19 @@ it stopped (until those links expire).
   set number of clips, or review each and continue, retry or stop.
   Both video tools share a model catalogue: Veo 3.1 and 3.1 Fast, Kling v3,
   Seedance 2.0, Hailuo 2.3 Fast, Wan 2.7 i2v.
-- **Prompt Box** (`/prompt`) — a non-functional UI mockup, kept as a styling
-  reference. Mentioned so its presence here isn't a mystery.
+- **Chat Box Studio** (`/prompt`) — the one tool that asks nothing of Replicate.
+  It records the chat box being used, as a video file at whatever resolution a
+  reel or a post wants: images dropping into the box one by one, the message
+  typed at a human speed, the pause, the send. Set the frame, the screen width it is laid
+  out at (400px — a phone — so a 1080×1920 reel is drawn at 2.7× and reads like
+  a phone rather than a shrunken desktop), the title above the box, the
+  placeholder, the speed and every pause; it comes with the sound of a real
+  keyboard — eight separate bursts of typing, one picked at random per run,
+  played from its first keystroke and cut when the typing stops, so the sound
+  starts and ends with the characters and no two recordings sound alike (or use
+  a clip of your own, or none). Every frame is painted on a canvas at full
+  resolution and encoded in the browser (WebCodecs — Chrome or Edge). Not in the
+  tools sidebar; it lives at its URL.
 
 ## Running it locally
 
@@ -114,8 +125,8 @@ test and build on every pull request.
 
 Each tool is a separate Vite HTML entry with its own bundle, so there is no
 client-side router and the heavy Batch Studio JavaScript never loads on the
-Prompt Box. Routing lives on the server: `server/routes.js` maps clean routes to
-built HTML files.
+Chat Box Studio. Routing lives on the server: `server/routes.js` maps clean
+routes to built HTML files.
 
 `api.replicate.com` sends no CORS headers, so the browser cannot call it
 directly. Both the Vite dev server and the Node server forward `/v1/...` to

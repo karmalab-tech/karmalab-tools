@@ -6,17 +6,15 @@
 // one for the same moment.
 //
 // Each image is held on a canvas for the same number of milliseconds, encoded
-// with WebCodecs and muxed into an MP4 (mp4-muxer, imported on demand like
-// JSZip). Nothing leaves the browser and no server is involved — the same trust
-// model as the rest of the app.
+// with WebCodecs and muxed into an MP4. The encoder plumbing — which codec and
+// container this browser actually has, the muxer, the encode queue — is shared
+// with the Chat Box Studio's recorder in src/shared/videoEncode.js; what is
+// here is the frames. Nothing leaves the browser and no server is involved —
+// the same trust model as the rest of the app.
 //
 // WebCodecs is what makes this possible without an ffmpeg-sized download, and
 // it is also the limit: a browser with no `VideoEncoder` cannot do this at all,
-// and `videoSupport()` answers that before the UI offers it. Which encoder is
-// there varies too — H.264 is the one every player takes, but a Chromium built
-// without proprietary codecs (and Firefox) only offers VP9/VP8, so the format
-// is chosen from what the browser actually has rather than assumed, and the
-// file is named after what it turned out to be.
+// and `videoSupport()` answers that before the UI offers it.
 //
 // Like src/apps/video/frames.js this drives real browser media APIs and has no
 // automated coverage — the pure parts (the frame order, the arithmetic, the
@@ -24,30 +22,19 @@
 // browser.
 
 import { cachedBlob } from './outputCache.js';
+import {
+  createMuxer,
+  drainEncoder,
+  pickEncoding,
+  stillBitrate,
+  videoSupport,
+} from './videoEncode.js';
+
+export { videoSupport };
 
 export const DEFAULT_MS_PER_IMAGE = 200;
 export const MIN_MS_PER_IMAGE = 20;
 export const MAX_MS_PER_IMAGE = 10000;
-
-// What to encode with, best first: H.264 in MP4 plays everywhere, VP9 or VP8 in
-// WebM is the fallback for a browser without an H.264 encoder. The H.264 entries
-// differ only in profile/level, and a level bounds the frame size it accepts
-// (baseline 3.1, the one everyone reaches for, tops out below a 1024×1024
-// image), so the choice is made against the real dimensions rather than assumed.
-const ENCODINGS = [
-  { codec: 'avc1.640034', container: 'mp4', muxerCodec: 'avc', label: 'MP4 · H.264' },
-  { codec: 'avc1.640033', container: 'mp4', muxerCodec: 'avc', label: 'MP4 · H.264' },
-  { codec: 'avc1.4d0034', container: 'mp4', muxerCodec: 'avc', label: 'MP4 · H.264' },
-  { codec: 'avc1.42e034', container: 'mp4', muxerCodec: 'avc', label: 'MP4 · H.264' },
-  { codec: 'avc1.42001f', container: 'mp4', muxerCodec: 'avc', label: 'MP4 · H.264' },
-  { codec: 'vp09.00.10.08', container: 'webm', muxerCodec: 'V_VP9', label: 'WebM · VP9' },
-  { codec: 'vp8', container: 'webm', muxerCodec: 'V_VP8', label: 'WebM · VP8' },
-];
-
-// Big enough that a held still stays crisp, bounded so a large chain doesn't
-// produce a file nobody can send anywhere.
-const bitrateFor = (width, height) =>
-  Math.min(24_000_000, Math.max(4_000_000, Math.round(width * height * 8)));
 
 // The duration box is free text: "0", "12.5" and "abc" are not durations.
 // Returns the milliseconds to hold each image, or null if it isn't one.
@@ -72,51 +59,10 @@ export function frameSequence(count, loop) {
 export const totalDurationMs = (count, msPerImage, loop) =>
   frameSequence(count, loop).length * msPerImage;
 
-// Whether this browser can encode a video here at all.
-export const videoSupport = () =>
-  typeof VideoEncoder !== 'undefined' &&
-  typeof VideoFrame !== 'undefined' &&
-  typeof createImageBitmap === 'function';
-
-// The first encoding this browser will take at these dimensions, or null if it
-// has a VideoEncoder but nothing behind it that can encode this.
-export async function pickEncoding(width, height, framerate) {
-  if (!videoSupport()) return null;
-  for (const encoding of ENCODINGS) {
-    try {
-      const support = await VideoEncoder.isConfigSupported({
-        codec: encoding.codec,
-        width,
-        height,
-        bitrate: bitrateFor(width, height),
-        framerate,
-      });
-      if (support.supported) return encoding;
-    } catch {
-      /* an unknown codec string throws rather than reporting unsupported */
-    }
-  }
-  return null;
-}
-
 // What the download is likely to be, for the modal to say so up front. A common
 // frame size stands in for the chain's own, since the images have not been
 // fetched yet; the file itself is named after what the build actually used.
 export const probeEncoding = () => pickEncoding(640, 640, 5);
-
-// Both muxers take the same shape of options and hand back an ArrayBuffer, so
-// only the container and the codec name differ.
-async function createMuxer({ container, muxerCodec }, width, height, frameRate) {
-  const { Muxer, ArrayBufferTarget } =
-    container === 'mp4' ? await import('mp4-muxer') : await import('webm-muxer');
-  return new Muxer({
-    target: new ArrayBufferTarget(),
-    video: { codec: muxerCodec, width, height, frameRate },
-    // MP4 only: puts the index at the front of the file, so the video can be
-    // played and scrubbed straight from disk without a server.
-    ...(container === 'mp4' ? { fastStart: 'in-memory' } : {}),
-  });
-}
 
 // Draw one image centred on the canvas, scaled to fit. The images are normally
 // all the same size, but a model or aspect ratio changed part-way through a
@@ -129,12 +75,6 @@ function drawContained(ctx, bitmap, width, height) {
   ctx.fillStyle = '#000';
   ctx.fillRect(0, 0, width, height);
   ctx.drawImage(bitmap, Math.round((width - w) / 2), Math.round((height - h) / 2), w, h);
-}
-
-// Keep the encoder fed without letting an unbounded queue of full-size frames
-// pile up in memory.
-async function drain(encoder) {
-  while (encoder.encodeQueueSize > 4) await new Promise((r) => setTimeout(r, 10));
 }
 
 // Build the video. `sources` are the images, in the order they should play, as
@@ -189,7 +129,7 @@ export async function buildImageVideo({ sources, msPerImage, loop, onProgress = 
     codec: encoding.codec,
     width,
     height,
-    bitrate: bitrateFor(width, height),
+    bitrate: stillBitrate(width, height),
     framerate,
   });
 
@@ -213,7 +153,7 @@ export async function buildImageVideo({ sources, msPerImage, loop, onProgress = 
       // encoder inserts its own keyframes where they earn their size.
       encoder.encode(frame, { keyFrame: position === 0 });
       frame.close();
-      await drain(encoder);
+      await drainEncoder(encoder);
     }
     // WebM's segment duration is taken from the last block's timestamp alone
     // (webm-muxer ignores its BlockDuration for this), so without a marker

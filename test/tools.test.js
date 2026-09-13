@@ -3,6 +3,7 @@
 // runs), how the Batch Video Studio's two modes flatten into one run list, and
 // how the Image Chain Studio finds the step a chain continues from.
 // None of it needs a DOM; `localStorage` is stubbed where it is touched.
+import { readFileSync } from 'node:fs';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { CHAIN_MODEL_KEYS, MODEL_CONFIGS, buildImageInput } from '../src/shared/imageModels.js';
@@ -38,6 +39,36 @@ import {
   parseDurationMs,
   totalDurationMs,
 } from '../src/shared/imageVideo.js';
+import {
+  DEFAULTS,
+  DROP_MS,
+  LIMITS,
+  clampSetting,
+  keystrokeTimes,
+  planRecording,
+  stateAt,
+} from '../src/apps/chatBox/timeline.js';
+import {
+  DEFAULT_BOX_WIDTH_PCT,
+  RESOLUTION_PRESETS,
+  SIZE_LIMITS,
+  boxCssWidth,
+  extensionForType,
+  parseSize,
+  recordingBasename,
+  sceneScale,
+} from '../src/apps/chatBox/scene.js';
+import { DEFAULT_LAYOUT_WIDTH, METRICS } from '../src/apps/chatBox/design.js';
+import {
+  MERGE_GAP_MS,
+  RUN_TAIL_MS,
+  arrangeClips,
+  clipTiming,
+  findOnsets,
+  renderTrack,
+  rmsEnvelope,
+  typingRuns,
+} from '../src/apps/chatBox/audio.js';
 
 const base = { promptText: 'a cat', suffix: '', aspect: '1:1', extraValues: {} };
 
@@ -873,7 +904,7 @@ describe('the tools in the navigation', () => {
     TOOLS.forEach((tool) => expect(paths).toContain(tool.path));
   });
 
-  it('leaves out the Prompt Box mockup', () => {
+  it('leaves out the unlisted Chat Box Studio', () => {
     expect(TOOLS.map((t) => t.path)).not.toContain('/prompt');
   });
 
@@ -946,5 +977,385 @@ describe('formatBytes', () => {
     expect(formatBytes(2 * 1024 * 1024)).toBe('2.0 MB');
     expect(formatBytes(400 * 1024)).toBe('400 KB');
     expect(formatBytes(250 * 1024 * 1024)).toBe('250 MB');
+  });
+});
+
+// The Chat Box Studio's arithmetic: what the recording's timeline looks like at
+// a given millisecond, and the frame it is painted into. The painting and the
+// encoding themselves need a canvas and WebCodecs, so they are verified in a
+// browser (see AGENTS.md) — this is the part that can be pinned down here.
+describe('the chat box recording timeline', () => {
+  const plan = (over) => planRecording({ text: 'hello', cps: 10, seed: 3, ...over });
+
+  it('adds up the four stretches of the recording', () => {
+    const p = plan({ startDelayMs: 500, pauseBeforeSendMs: 300, waitAfterSendMs: 2000 });
+    expect(p.typingStartMs).toBe(500);
+    expect(p.sendAtMs).toBeCloseTo(500 + p.typingMs + 300, 5);
+    expect(p.totalMs).toBeCloseTo(p.sendAtMs + 2000, 5);
+  });
+
+  it('types at about the speed it was asked for', () => {
+    const text = 'a'.repeat(60); // no punctuation, so nothing pauses
+    const p = planRecording({ text, cps: 20, startDelayMs: 0, seed: 1 });
+    // 60 characters at 20 a second is three seconds, give or take the jitter.
+    expect(p.typingMs).toBeGreaterThan(2600);
+    expect(p.typingMs).toBeLessThan(3400);
+  });
+
+  it('is the same recording every time, for the same settings', () => {
+    expect(keystrokeTimes('hello there', 12, 7)).toEqual(keystrokeTimes('hello there', 12, 7));
+    expect(keystrokeTimes('hello there', 12, 7)).not.toEqual(keystrokeTimes('hello there', 12, 8));
+  });
+
+  it('breathes at a full stop', () => {
+    const [a, b] = [keystrokeTimes('ab', 10, 1), keystrokeTimes('a.b', 10, 1)];
+    // The third character lands later than the second when a full stop is in
+    // the way, even though it is only one character further along.
+    expect(b[2] - b[1]).toBeGreaterThan(a[1] - a[0]);
+  });
+
+  it('shows an empty box before it starts, and the whole message at the send', () => {
+    const p = plan({ startDelayMs: 500 });
+    expect(stateAt(0, p)).toMatchObject({ charCount: 0, phase: 'idle', sending: false });
+    expect(stateAt(p.sendAtMs, p)).toMatchObject({
+      text: 'hello',
+      phase: 'sending',
+      sending: true,
+    });
+    expect(stateAt(p.totalMs, p).sending).toBe(true);
+  });
+
+  it('never un-types a character', () => {
+    const p = plan({});
+    let last = 0;
+    for (let ms = 0; ms <= p.totalMs; ms += 16) {
+      const { charCount } = stateAt(ms, p);
+      expect(charCount).toBeGreaterThanOrEqual(last);
+      last = charCount;
+    }
+    expect(last).toBe(5);
+  });
+
+  it('holds the caret solid while typing, and drops it at the send', () => {
+    const p = plan({ startDelayMs: 0 });
+    expect(stateAt(p.typingMs / 2, p).caretOn).toBe(true);
+    expect(stateAt(p.sendAtMs + 100, p).caretOn).toBe(false);
+  });
+
+  it('counts the frames the encoder will be asked for', () => {
+    const p = planRecording({
+      text: 'hi',
+      cps: 10,
+      fps: 30,
+      startDelayMs: 0,
+      pauseBeforeSendMs: 0,
+      waitAfterSendMs: 1000,
+    });
+    expect(p.frameCount).toBe(Math.round((p.totalMs / 1000) * 30));
+  });
+
+  it('clamps a settings box that is empty, silly or not a number', () => {
+    expect(clampSetting('', LIMITS.cps, DEFAULTS.cps)).toBe(DEFAULTS.cps);
+    expect(clampSetting('abc', LIMITS.cps, DEFAULTS.cps)).toBe(DEFAULTS.cps);
+    expect(clampSetting('-4', LIMITS.cps, DEFAULTS.cps)).toBe(LIMITS.cps[0]);
+    expect(clampSetting('900', LIMITS.cps, DEFAULTS.cps)).toBe(LIMITS.cps[1]);
+    expect(clampSetting('18', LIMITS.cps, DEFAULTS.cps)).toBe(18);
+  });
+});
+
+describe('the chat box recording frame', () => {
+  it('keeps a resolution even — H.264 will not take an odd one', () => {
+    expect(parseSize('1081', 1080)).toBe(1080);
+    expect(parseSize('1080', 1080)).toBe(1080);
+  });
+
+  it('falls back and clamps rather than trusting the box', () => {
+    expect(parseSize('', 1080)).toBe(1080);
+    expect(parseSize('nope', 720)).toBe(720);
+    expect(parseSize('10', 1080)).toBe(SIZE_LIMITS[0]);
+    expect(parseSize('99999', 1080)).toBe(SIZE_LIMITS[1]);
+  });
+
+  it('offers the shapes a reel is cut to', () => {
+    expect(RESOLUTION_PRESETS.some((p) => p.width === 1080 && p.height === 1920)).toBe(true);
+    RESOLUTION_PRESETS.forEach((p) => {
+      expect(p.width % 2).toBe(0);
+      expect(p.height % 2).toBe(0);
+    });
+  });
+
+  it('draws a phone-sized layout big enough to fill the frame', () => {
+    // The whole point of the layout width: a 1080-wide reel of a 400-wide
+    // screen is drawn at 2.7×, so the text in it is as big as it is on a phone.
+    expect(sceneScale(1080, 400)).toBeCloseTo(2.7, 5);
+    expect(sceneScale(1080, 860)).toBeCloseTo(1.256, 3);
+    expect(DEFAULT_LAYOUT_WIDTH).toBeLessThanOrEqual(430); // a phone, not a window
+  });
+
+  it('gives the box its share of that screen, not of the frame', () => {
+    expect(boxCssWidth(400, 90)).toBe(360);
+    expect(boxCssWidth(400, 100)).toBe(400);
+    // …and the two together put it at the same fraction of the frame.
+    expect(boxCssWidth(400, 90) * sceneScale(1080, 400)).toBeCloseTo(1080 * 0.9, 5);
+  });
+
+  it('opens on a composer that nearly fills the screen it is on', () => {
+    expect(DEFAULT_BOX_WIDTH_PCT).toBeGreaterThanOrEqual(85);
+  });
+
+  it('names the download after the frame, and the file after its container', () => {
+    expect(recordingBasename(1080, 1920)).toBe('karmalab-chat-box-1080x1920');
+    expect(extensionForType('video/webm')).toBe('webm');
+    expect(extensionForType('video/mp4')).toBe('mp4');
+    expect(extensionForType(undefined)).toBe('mp4');
+  });
+});
+
+// The images landing in the box before the typing starts: when each one is
+// there, and what that does to the rest of the timeline.
+describe('the images a recording drops in', () => {
+  const plan = (over) =>
+    planRecording({
+      text: 'hi',
+      cps: 10,
+      seed: 2,
+      startDelayMs: 400,
+      attachIntervalMs: 500,
+      pauseBeforeSendMs: 0,
+      waitAfterSendMs: 0,
+      ...over,
+    });
+
+  it('lands them one after another, starting after the opening beat', () => {
+    expect(plan({ attachCount: 3 }).attachTimes).toEqual([400, 900, 1400]);
+  });
+
+  it('holds the typing back until one beat after the last of them', () => {
+    expect(plan({ attachCount: 0 }).typingStartMs).toBe(400);
+    expect(plan({ attachCount: 3 }).typingStartMs).toBe(1900);
+  });
+
+  it('pushes the send and the whole video back by the same amount', () => {
+    const none = plan({ attachCount: 0 });
+    const three = plan({ attachCount: 3 });
+    expect(three.sendAtMs - none.sendAtMs).toBe(1500);
+    expect(three.totalMs - none.totalMs).toBe(1500);
+  });
+
+  it('puts them in the box one at a time, never before their moment', () => {
+    const p = plan({ attachCount: 2 });
+    expect(stateAt(0, p)).toMatchObject({ attachCount: 0, phase: 'idle' });
+    expect(stateAt(399, p).attachCount).toBe(0);
+    expect(stateAt(400, p)).toMatchObject({ attachCount: 1, phase: 'attaching' });
+    expect(stateAt(900, p).attachCount).toBe(2);
+    expect(stateAt(p.totalMs, p).attachCount).toBe(2);
+  });
+
+  it('reports how far the newest one is into landing', () => {
+    const p = plan({ attachCount: 1 });
+    expect(stateAt(399, p).dropProgress).toBe(1); // nothing landed yet
+    expect(stateAt(400, p).dropProgress).toBe(0);
+    expect(stateAt(400 + DROP_MS / 2, p).dropProgress).toBeCloseTo(0.5, 5);
+    expect(stateAt(400 + DROP_MS * 2, p).dropProgress).toBe(1);
+  });
+});
+
+// The typing sound: where it is heard, which clip plays there, and what the
+// track it renders to looks like.
+describe('the typing sound', () => {
+  const plan = planRecording({
+    text: 'hello there',
+    cps: 10,
+    seed: 5,
+    startDelayMs: 1000,
+    pauseBeforeSendMs: 800,
+    waitAfterSendMs: 2000,
+  });
+  // Two clips, as decodeClip would hand them over: half a second of room tone
+  // before the first keystroke in one of them.
+  const clip = (durationMs, leadMs) => ({
+    samples: new Float32Array(Math.round((durationMs / 1000) * 1000)).fill(1),
+    sampleRate: 1000,
+    durationMs,
+    leadMs,
+    usableMs: durationMs - leadMs,
+    keystrokes: 8,
+  });
+
+  it('is heard only while characters are landing', () => {
+    const runs = typingRuns(plan);
+    expect(runs.length).toBeGreaterThan(0);
+    runs.forEach((run) => {
+      expect(run.startMs).toBeGreaterThanOrEqual(plan.typingStartMs);
+      expect(run.endMs).toBeLessThanOrEqual(plan.sendAtMs);
+      expect(run.endMs).toBeGreaterThan(run.startMs);
+    });
+  });
+
+  it('is silent before the typing and from the send onwards', () => {
+    const runs = typingRuns(plan);
+    const heardAt = (ms) => runs.some((r) => ms >= r.startMs && ms < r.endMs);
+    expect(heardAt(0)).toBe(false);
+    expect(heardAt(plan.typingStartMs - 1)).toBe(false);
+    // Silent right up to the first character, not from the moment the typing
+    // window opens — nothing has been pressed yet.
+    expect(heardAt(plan.typingStartMs)).toBe(false);
+    expect(heardAt(plan.typingStartMs + plan.times[0] + 1)).toBe(true);
+    expect(heardAt(plan.sendAtMs + 1)).toBe(false);
+    expect(heardAt(plan.totalMs - 1)).toBe(false);
+  });
+
+  it('runs two keystrokes together rather than gating each one', () => {
+    // At 10 characters a second the gap is ~100ms — inside the tail, so a burst
+    // of typing is one run of sound, not a stutter.
+    expect(typingRuns(plan).length).toBeLessThan(plan.times.length);
+  });
+
+  it('breaks the run at a pause longer than the tail', () => {
+    const slow = planRecording({ text: 'ab', cps: 2, seed: 1, startDelayMs: 0 });
+    const runs = typingRuns(slow);
+    expect(runs.length).toBe(2);
+    expect(runs[0].endMs - runs[0].startMs).toBeCloseTo(RUN_TAIL_MS, 5);
+  });
+
+  it('stops a beat after the last character rather than ringing on', () => {
+    const runs = typingRuns(plan);
+    const lastKeystroke = plan.typingStartMs + plan.times[plan.times.length - 1];
+    expect(runs[runs.length - 1].endMs - lastKeystroke).toBeLessThanOrEqual(RUN_TAIL_MS);
+  });
+
+  it('plays every clip from its own first keystroke, never its silence', () => {
+    const clips = [clip(800, 500), clip(800, 0)];
+    const { segments } = arrangeClips([{ startMs: 0, endMs: 600 }], clips, () => 0);
+    expect(segments[0].offsetMs).toBe(clips[segments[0].clip].leadMs);
+  });
+
+  it('fills a long run with more clips, and cuts the last one when it ends', () => {
+    const clips = [clip(400, 0), clip(400, 0), clip(400, 0)];
+    const { segments } = arrangeClips([{ startMs: 100, endMs: 1000 }], clips, () => 0);
+    expect(segments.length).toBe(3);
+    expect(segments[0].atMs).toBe(100);
+    expect(segments[1].atMs).toBe(500);
+    expect(segments[2].durationMs).toBe(100); // cut at the end of the run
+    const last = segments[segments.length - 1];
+    expect(last.atMs + last.durationMs).toBe(1000);
+  });
+
+  it('picks a different clip each time before repeating any', () => {
+    const clips = [clip(300, 0), clip(300, 0), clip(300, 0)];
+    const { segments, wrapped } = arrangeClips([{ startMs: 0, endMs: 900 }], clips, () => 0);
+    expect(new Set(segments.map((s) => s.clip)).size).toBe(3);
+    expect(wrapped).toBe(false);
+  });
+
+  it('says so when the typing outlasts every clip it has', () => {
+    const clips = [clip(300, 0)];
+    const { wrapped } = arrangeClips([{ startMs: 0, endMs: 900 }], clips, () => 0);
+    expect(wrapped).toBe(true);
+  });
+
+  it('lays the clips into silence, and fades their edges', () => {
+    const clips = [{ samples: new Float32Array(1000).fill(1), sampleRate: 1000 }];
+    const track = renderTrack(
+      clips,
+      [{ atMs: 50, clip: 0, offsetMs: 0, durationMs: 50 }],
+      200,
+      1000
+    );
+    expect(track.length).toBe(200);
+    expect(track[0]).toBe(0); // before the segment
+    expect(track[199]).toBe(0); // after it
+    expect(track[75]).toBeCloseTo(1, 5); // the middle of it, at full level
+    expect(track[50]).toBeLessThan(1); // faded in
+  });
+
+  it('finds the keystrokes in a clip, and where its typing starts', () => {
+    // Half a second of near-silence, then three clicks 200ms apart.
+    const rate = 1000;
+    const samples = new Float32Array(1500).fill(0.001);
+    [500, 700, 900].forEach((at) => {
+      for (let i = 0; i < 20; i++) samples[at + i] = 0.8;
+    });
+    const onsets = findOnsets(rmsEnvelope(samples, rate));
+    expect(onsets).toEqual([500, 700, 900]);
+    const timing = clipTiming(samples, rate);
+    expect(timing.leadMs).toBeLessThan(500);
+    expect(timing.leadMs).toBeGreaterThan(480);
+    expect(timing.keystrokes).toBe(3);
+    expect(timing.usableMs).toBeCloseTo(1500 - timing.leadMs, 5);
+  });
+
+  it('has nothing to play when there is nothing to type', () => {
+    expect(typingRuns(planRecording({ text: '' }))).toEqual([]);
+    expect(arrangeClips([], [clip(300, 0)]).segments).toEqual([]);
+  });
+
+  it('merges keystrokes closer together than the gap it allows', () => {
+    expect(MERGE_GAP_MS).toBeLessThan(RUN_TAIL_MS);
+  });
+});
+
+// The chat box is drawn twice — as DOM in ChatBox.jsx and on a canvas in
+// scene.js — and the video is only the box on screen for as long as the two
+// agree about its sizes. They agree by both reading METRICS, and this is what
+// stops a size being typed into the markup instead, which is how a restyled box
+// and an unchanged recording happened once already.
+describe('the chat box and its painter', () => {
+  const source = readFileSync(new URL('../src/apps/chatBox/ChatBox.jsx', import.meta.url), 'utf8');
+
+  it('has no pixel sizes written into the markup', () => {
+    // Comments are allowed to talk about sizes; the markup is not.
+    const code = source.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
+    // Tailwind arbitrary values in px — `pl-[22px]`, `text-[19px]`, `w-[56px]`.
+    const hardcoded = code.match(/\[\d+(\.\d+)?px\]/g) || [];
+    // The drop overlay's hairline border is the one exception: it is a border
+    // style rather than a metric the canvas has to match.
+    expect(hardcoded.filter((v) => v !== '[1.5px]')).toEqual([]);
+  });
+
+  it('takes its sizes from METRICS', () => {
+    expect(source).toContain("from './design.js'");
+    ['padLeft', 'padRight', 'radius', 'fontSize', 'thumb', 'control'].forEach((key) => {
+      expect(source).toContain(`m.${key}`);
+    });
+  });
+
+  it('has a metric for everything the painter draws', () => {
+    // A number the canvas multiplies by the scale has to exist here, or the
+    // painter would be scaling `undefined`.
+    [
+      'radius',
+      'padTop',
+      'padRight',
+      'padBottom',
+      'padLeft',
+      'gap',
+      'fontSize',
+      'lineHeight',
+      'minTextHeight',
+      'maxTextLines',
+      'caretWidth',
+      'thumb',
+      'thumbRadius',
+      'thumbGap',
+      'control',
+      'pillRadius',
+      'chipFontSize',
+      'chipRadius',
+      'chipPadX',
+      'chipGap',
+      'pillPadLeft',
+      'pillPadRight',
+      'pillGap',
+      'iconSize',
+      'sendIconSize',
+      'chevronSize',
+      'headlineFontSize',
+      'headlineGap',
+      'shadowBlur',
+      'shadowOffsetY',
+    ].forEach((key) => {
+      expect(Number.isFinite(METRICS[key])).toBe(true);
+    });
   });
 });

@@ -23,7 +23,7 @@ import {
 } from '../shared/fields.js';
 import { loadApiKey, loadOpenaiKey } from '../shared/apiKey.js';
 import { downloadUrl, downloadZip, expiredMessage, triggerDownload } from '../shared/download.js';
-import { useCachedImage } from '../shared/useCachedImage.js';
+import { useCachedOutput } from '../shared/useCachedOutput.js';
 import { useGenerationRun } from '../shared/useGenerationRun.js';
 import {
   MODEL_CONFIGS,
@@ -52,7 +52,7 @@ function ResultCard({ result, cacheKey }) {
   const { prompt, status, outputUrl, error } = result;
   // Falls back to the result URL until the cached copy is ready, and back to it
   // for a run from before the cache existed.
-  const src = useCachedImage(cacheKey, outputUrl);
+  const src = useCachedOutput(cacheKey, outputUrl);
 
   async function download() {
     setDownloading(true);

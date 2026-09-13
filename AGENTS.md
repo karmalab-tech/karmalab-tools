@@ -24,8 +24,12 @@ that also proxies the Replicate API.
   items in `src/apps/batchVideo/items.js`.
 - **Continuous Video Studio** (`/video-chain`) — chains video clips; each clip
   starts from the last frame of the previous one, extracted in-browser via canvas.
-- **Prompt Box** (`/prompt`) — a styled, non-functional mockup. Don't wire it up
-  to anything without being asked.
+- **Chat Box Studio** (`/prompt`) — the odd one out: it generates nothing on
+  Replicate. It records the chat box (`src/apps/chatBox/ChatBox.jsx`, the styled
+  box this route used to be a mockup of) having images dropped into it and a
+  message typed and sent, as a video file at whatever resolution a reel wants —
+  every frame painted on a canvas and encoded in the browser, over the sound of
+  a real keyboard cut to the same timeline. Still not in the tools sidebar.
 
 ## Rules that matter here
 
@@ -62,11 +66,15 @@ that also proxies the Replicate API.
    Persisting more per item means adding the key to `PERSISTED_ITEM_KEYS` in
    `src/shared/runs.js`; that whitelist is what keeps image data URIs out of
    `localStorage`, so never widen it to a data URI.
+   A tool whose items are made in the browser rather than on Replicate passes
+   `remote: false` (the Chat Box Studio): there is no prediction to ask about, so
+   such a run is never refreshed, and one interrupted by a closed tab is closed
+   out and shelved instead of being put back on screen to wait for nothing.
 7. **Adding a tool is four edits**: an HTML entry at the root, an input in
    `vite.config.js`, an entry in `server/routes.js` — the source of truth for
    which tools exist — and one in `src/shared/tools.js`, which is what the tools
    sidebar puts in front of people. The two lists are deliberately not the same
-   (the Prompt Box mockup is routed but not offered); a test asserts every
+   (the Chat Box Studio is routed but not offered); a test asserts every
    navigable tool is a real route, so they can't drift into a dead link.
 
 ## Routing lives on the backend
@@ -78,7 +86,7 @@ client-side router — switching tools is a plain link, and the tools sidebar
 at four and wrapped on a phone; behind one button the bar keeps to three
 controls at any width. The tools are genuinely independent — no shared shell, no
 cross-tool state — so this keeps each bundle small (the heavy Batch Studio
-JavaScript never loads on the Prompt Box) and lets the server own routing.
+JavaScript never loads on the Chat Box Studio) and lets the server own routing.
 `vite build` emits `dist/`; `server/routes.js` maps clean routes to the built
 HTML.
 
@@ -88,8 +96,14 @@ HTML.
   `prompt.html` — Vite HTML entries, each loading a script from `src/entries/`.
 - `src/apps/` — the tools. Per-tool logic in `src/apps/batch/` (`storage.js`),
   `src/apps/imageChain/` (`chain.js` — the step model, `storage.js`),
-  `src/apps/batchVideo/` (`items.js`, `storage.js`) and `src/apps/video/`
-  (`frames.js` — end-frame extraction via off-screen `<video>` + canvas).
+  `src/apps/batchVideo/` (`items.js`, `storage.js`), `src/apps/video/`
+  (`frames.js` — end-frame extraction via off-screen `<video>` + canvas) and
+  `src/apps/chatBox/` (`ChatBox.jsx` — the box itself, `design.js` — the numbers
+  it is built from, `scene.js` — the same box painted on a canvas, `timeline.js`
+  — what it is doing at a given millisecond, `audio.js` — the typing sound
+  arranged against that, `typing/` + `sequences.js` — the keyboard clips that
+  ship with it, `record.js` — the frames and the sound encoded into a file,
+  `sound.js` + `storage.js` — what is kept between visits).
 - `src/shared/` — what the tools are built from: `theme.css` (the Tailwind
   entry — `@theme` tokens, base styles, keyframes), `components/` (import from
   `src/shared/components`, which also pulls in `theme.css`), `tools.js` (the
@@ -102,7 +116,10 @@ HTML.
   current-run / run-history persistence, one prefix per tool), `apiKey.js`, `fields.js`,
   `useUnloadGuard.js`, `imageVideo.js` (stitching a list of images into one
   video — both image tools download that way, through the shared
-  `components/DownloadModal.jsx`), plus the run machinery: `runs.js` (the run/item model —
+  `components/DownloadModal.jsx`), `videoEncode.js` (the WebCodecs encoder
+  plumbing every tool that builds a video locally shares — which codec and
+  container this browser has, the muxer, the encode queue, and the audio track
+  when there is one), plus the run machinery: `runs.js` (the run/item model —
   what is persisted, a run's progress, the tab title), `useGenerationRun.js`
   (the hook every generation tool shares) and `download.js` (single-file and zip
   downloads).
@@ -169,14 +186,22 @@ definition.
 
 So `src/shared/outputCache.js` copies every output into **IndexedDB the moment
 it lands**, while the URL is still good, and everything downstream reads the
-cache before the network: the result cards (`useCachedImage`), the single
+cache before the network: the result cards (`useCachedOutput`), the single
 downloads and zips (`download.js`), and the image chain's video encoder. The
 copy is per browser, on the user's own machine — no server sees it, so the trust
 model is unchanged, but note it _is_ a change to "nothing is stored": the
 outputs are now on disk locally, and the History modal says so.
 
+For the Chat Box Studio the cache is not an insurance policy but the only copy
+there is: its `outputUrl` is a blob URL, which dies with the tab that made it,
+so a recording reopened from History plays and downloads from IndexedDB or not
+at all. Its typing sound lives in the same store, under
+`chatBoxStudio/assets/typingSound` (`src/apps/chatBox/sound.js`) — a clip is a
+file chosen once and wanted under every recording after that, and `assets` sits
+where a run id normally does, so clearing the history leaves it alone.
+
 - **The write happens in `useGenerationRun.updateItem`**, not in each tool: any
-  patch carrying an `outputUrl` triggers the copy, so all four tools got this at
+  patch carrying an `outputUrl` triggers the copy, so every tool got this at
   one call site. It is deliberately not awaited — a run is never held up by
   caching, and a failed copy just means falling back to the URL later.
 - **Keys are `tool/runId/itemId`** (`cacheKey`), which is what lets a run's files
@@ -194,16 +219,20 @@ outputs are now on disk locally, and the History modal says so.
   could not find anywhere; the tools surface that instead of handing over a zip
   that is quietly three images light.
 
-## Stitching images into a video
+## Making a video in the browser
 
-`src/shared/imageVideo.js` turns a list of finished images into one video, in
-the browser: each image is drawn on a canvas, held for the chosen number of
-milliseconds, encoded with **WebCodecs** and muxed by `mp4-muxer` or
-`webm-muxer` (both imported on demand, like JSZip, so nothing loads until the
-download modal asks for it). No upload, no ffmpeg-sized dependency, same trust
-model as the rest of the app.
+Two things here build a video locally rather than fetching one from a model:
+`src/shared/imageVideo.js` turns a list of finished images into one clip — each
+held for the chosen number of milliseconds, which is how both image tools
+download a run, through `components/DownloadModal.jsx` — and
+`src/apps/chatBox/record.js` records the chat box. Both draw frames on a canvas,
+encode them with **WebCodecs** and mux them with `mp4-muxer` or `webm-muxer`
+(imported on demand, like JSZip, so nothing loads until a video is actually
+asked for). No upload, no ffmpeg-sized dependency, same trust model as the rest
+of the app. What they share — picking an encoding, the muxer, draining the
+encode queue — is `src/shared/videoEncode.js`; what differs is the frames.
 
-Three things there are less obvious than they look:
+Things there that are less obvious than they look:
 
 - **The format is not a given.** H.264 in MP4 is what every player takes, but a
   Chromium built without proprietary codecs (and Firefox) has WebCodecs and no
@@ -214,12 +243,17 @@ Three things there are less obvious than they look:
   (baseline 3.1 is already too small for a 1024×1024 image).
 - **WebM needs a marker frame at the end.** `webm-muxer` takes the segment
   duration from the last block's timestamp and ignores its `BlockDuration`, so
-  without one repeat of the final image, timed one hold later, the file claims
-  to be a frame short and players cut the last image off. `mp4-muxer` adds the
-  last sample's own duration, so the MP4 path must _not_ do this.
-- **Looping stops one short.** The frame order for a loop is the list forwards
-  then back down it, ending on the second image: the player's own loop supplies
-  the return to the first, so it doesn't sit on a doubled frame at the seam.
+  without one extra frame at the very end the file claims to be a frame short
+  and players cut it off. `mp4-muxer` adds the last sample's own duration, so
+  the MP4 path must _not_ do this. Both tools carry this.
+- **A held still and a moving picture want different bitrates.** `stillBitrate`
+  is per-frame quality for a chain of completely different images;
+  `motionBitrate` is for 30 frames a second where almost nothing changes between
+  them, and is what keeps a 1080×1920 reel in single-digit megabytes.
+- **Looping stops one short** (the image chain). The frame order for a loop is
+  the chain forwards then back down it, ending on the second image: the player's
+  own loop supplies the return to the first, so it doesn't sit on a doubled
+  frame at the seam.
 
 Both image tools reach it through `src/shared/components/DownloadModal.jsx`,
 which is the whole download UI — the duration, the loop, the zip, the encoder
@@ -227,6 +261,91 @@ this browser turned out to have — and takes the wording that differs (a chain'
 steps in chain order, a batch's images in prompt order) as props. The Image
 Chain Studio orders the images by step, the Batch Image Studio by prompt;
 nothing else about the two downloads differs.
+
+## Recording the chat box
+
+The Chat Box Studio does not capture the screen. `src/apps/chatBox/scene.js`
+paints the box on a canvas at the target resolution, from the same numbers the
+DOM box is built from (`design.js`), and `timeline.js` says what it should look
+like at a given millisecond. So the recording is laid out at 1080 wide rather
+than scaled up from a screenshot, it renders as fast as the encoder goes
+rather than in real time, and it needs no visible window.
+
+**Restyling the box means editing `design.js`, and only `design.js`.** Both
+renderers read METRICS from it: `scene.js` multiplies each number by the scale,
+and `ChatBox.jsx` applies them as inline styles. That is the one place in this
+repo where a component does not size itself with Tailwind utilities, and it is
+deliberate — a padding written as `pl-[22px]` in the markup and as
+`METRICS.padLeft` in the painter is two numbers that have to be changed
+together, and the first time one of them wasn't, a restyled box went on
+recording the old one. Colours, layout and states are still Tailwind. A test
+(`the chat box and its painter`) fails if a pixel size finds its way back into
+the markup, and the studio's stage is the eyeball check — it is the real
+component in a frame the shape of the video, at the scale the recording uses,
+so the two are side by side the whole time.
+
+A recording is five stretches of time, all of them in `timeline.js`: an empty
+box, the images landing in it one every `attachIntervalMs`, the message typed,
+a pause, the send. Images are not sitting in the box when the video opens —
+they drop in, one after another, and typing starts one interval after the last
+of them.
+
+Details worth knowing:
+
+- **The layout width is what makes it a phone.** The box is laid out at
+  `layoutWidth` CSS pixels (400 by default — a phone) and every metric is then
+  multiplied by `frame width / layout width`, so a 1080-wide reel draws it at
+  2.7×: the text is as big in the frame as it is on a phone. Laying the same box
+  out at 860 and drawing it at 1.26× — which is what it did first — is a desktop
+  window shrunk into a reel, and reads as tiny on the thing it is watched on.
+  The box-width slider is a share of that screen, not of the frame.
+- **The composition is settled against the finished message**, and the box is
+  drawn from its bottom edge up. The controls row and the send button hold still
+  while the box grows over them, instead of the whole thing drifting up the
+  frame with every new line. The stage does the same, by measuring the box and
+  shifting it by half of what it has yet to grow (`boxLift`).
+- **Fonts have to be loaded before the first frame.** A canvas silently falls
+  back to a system font for a face the document hasn't loaded, so `ensureFonts()`
+  waits on the ones in `FONT_SPECS`; without it the video ships in Arial and
+  nothing says so.
+- **The attachment strip wraps**, like the DOM box's does (`thumbsPerRow`), so a
+  tenth image doesn't quietly fall off the edge of the frame.
+
+### The typing sound
+
+`typing/` holds eight short mp3s, one per burst of typing, cut out of a single
+recording of a real keyboard. They are what the sound is made of: wherever
+characters are landing, `audio.js` drops one of them at random under the run,
+and wherever they are not there is nothing. That arrangement is what makes the
+sound do the three things it has to, rather than any gating:
+
+- **Only while typing**, because a clip exists only under a run of keystrokes —
+  the opening beat, the images dropping in, a breath at a full stop, the pause
+  before the send and the wait after it are silent.
+- **In time with the picture**, because every clip is played from its own first
+  keystroke (`leadMs`, found by the onset detector when it is decoded), never
+  from the top of the file. That matters: the source recording opens with 450ms
+  of room tone, which a clock-based cut would have laid under the first
+  characters — and did, until it was measured. The far end is cut the same way,
+  `RUN_TAIL_MS` after the last character, so the sound stops with the typing
+  instead of ringing into the pause.
+- **Never the same part twice**, because clips are picked without replacement
+  until they run out (`wrapped` says when a long message has gone through them
+  all).
+
+Splitting a new source clip is the same job each time: find the onsets, group
+them into bursts, and cut the mp3 on frame boundaries so nothing is re-encoded —
+the sequences in `typing/` were cut that way from one 8-second recording, and
+another file dropped into that folder joins the set without a code change
+(`sequences.js` globs it).
+
+The sound then costs the recorder a second track: `pickTracks` prefers whatever
+video encoding is best, but a browser with H.264 and no AAC would otherwise
+produce a silent MP4, so it looks again in WebM, whose Opus every browser with
+an `AudioEncoder` has. The picture is encoded first and the sound after — each
+track's own chunks in order, which is what both muxers ask for. The studio's
+"Play preview" builds the same track and plays it through Web Audio, so the
+preview is the file, ears included.
 
 ## What the proxy allows, and why
 
@@ -265,7 +384,22 @@ Batch Video run-item flattening including its download filename stems, and the
 Image Chain step model (the step a chain continues from or a retry goes back to,
 its numbering, the step count parsing and the download filename stems) and its
 video arithmetic (the frame order with and without a loop, the resulting length,
-the duration parsing).
+the duration parsing), and the Chat Box Studio's recording timeline (the four
+stretches it adds up to, that the typing keeps to the speed asked for and pauses
+at a full stop, that the same settings produce the same recording, that a
+character is never un-typed and the caret goes away at the send, the frame count
+the encoder is asked for, and the clamping of every settings box), its frame
+arithmetic (an even resolution, the presets, the download's name and extension),
+that the box's markup carries no pixel
+sizes of its own and takes them from METRICS instead (so the painter cannot
+drift from the box), the images it drops in (when each lands, what that does to
+the typing, the send and the length, and how far the newest one is into
+landing) and its typing sound
+(that it is heard only while characters land and silent either side, that a
+burst is one run and a pause breaks it, that a clip is played from its own first
+keystroke and cut when the run ends, that a long run is filled with more clips
+and no clip repeats until they have all been used, that the onset detector finds
+the keystrokes in a clip, and that the track is silence with faded edges).
 
 `useGenerationRun` has no unit coverage — it is a hook over `localStorage`,
 `document.title` and `beforeunload`, and the node test environment has none of
@@ -295,11 +429,35 @@ encoder, so it exercised the WebM path; the MP4 path's timing was checked
 separately against `mp4-muxer` directly (four 120ms samples → a 480ms file),
 and a real H.264 encode still wants a look on a browser that has one.
 
-`src/apps/video/frames.js` and `src/shared/imageVideo.js` have **no**
-automated coverage of the media parts — jsdom can't decode video and the node
-environment has no WebCodecs, so a test there would assert nothing meaningful;
-they want a Playwright test. It's the subtlest code in the repo, so changes need manual verification in
-a real browser, and say so rather than implying tests cover it.
+The Chat Box Studio was checked the same way, in Chromium + Playwright, since
+the parts of it that could be wrong are all browser parts: a recording driven
+from the UI came out at the planned length (a 102-frame plan → a 3.4s file) and
+was archived to history with its title, label and filename stem but no
+prediction id; after a reload — with the blob URL in storage long dead — opening
+it from History played it from the output cache; a drag over the box lit it up
+and a dropped file became a thumbnail in it and a count on the attach pill; and
+the frames themselves were read back as PNGs at each phase (empty, typing with
+the caret at the end of the text, two lines with the spinner in the send button)
+to check the painting against the box on screen. The stage's anchoring was
+checked by measuring the box's bottom edge: settled and mid-preview, to the
+pixel. The images and the sound were checked the same way: frames read back as
+PNGs at each landing (the box lit, the newest thumbnail mid-scale, the pill's
+count following it), and a recording with a clip under it decoded back out of
+the muxed file — 6.013s of Opus against a 6.0s video, silent before the typing
+(RMS 0) and after the send (RMS 0), audible in between. Driven from the UI, a
+clip taken through the file picker survived a reload from IndexedDB with its
+name, and the recording came out labelled `WebM · VP9 + Opus`. That Chromium has no H.264 encoder either, so what shipped there was
+WebM/VP9 — the MP4 path wants a look on a browser that has one. Google Fonts is
+not reachable from that sandbox, so the frames rendered in the fallback face:
+`ensureFonts()` itself is unverified, and worth a look on a machine with the
+fonts.
+
+`src/apps/video/frames.js`, `src/shared/imageVideo.js` and
+`src/apps/chatBox/scene.js` + `record.js` have **no** automated coverage of the
+media parts — jsdom can't decode video, and the node environment has no canvas
+and no WebCodecs, so a test there would assert nothing meaningful; they want a
+Playwright test. It's the subtlest code in the repo, so changes need manual
+verification in a real browser, and say so rather than implying tests cover it.
 
 One ESLint choice worth knowing: `eslint.config.js` enables
 `react-hooks/rules-of-hooks` and `exhaustive-deps` by name rather than spreading
