@@ -24,6 +24,12 @@ that also proxies the Replicate API.
   items in `src/apps/batchVideo/items.js`.
 - **Continuous Video Studio** (`/video-chain`) — chains video clips; each clip
   starts from the last frame of the previous one, extracted in-browser via canvas.
+- **Video Effects** (`/video-effects`) — the other tool that generates nothing
+  on Replicate: real-time WebGL2 effects applied to an uploaded video, entirely
+  in the browser (no API key). Original and processed video side by side, in
+  sync; effects combine into a chain; clicking the processed side exports a
+  full-resolution MP4 faster than realtime via WebCodecs. Unlike the other
+  tools it uses the full window width.
 - **Chat Box Studio** (`/prompt`) — the odd one out: it generates nothing on
   Replicate. It records the chat box (`src/apps/chatBox/ChatBox.jsx`, the styled
   box this route used to be a mockup of) having images dropped into it and a
@@ -93,11 +99,20 @@ HTML.
 ## Layout
 
 - `index.html` / `image-chain.html` / `batch-videos.html` / `video-chain.html` /
-  `prompt.html` — Vite HTML entries, each loading a script from `src/entries/`.
+  `video-effects.html` / `prompt.html` — Vite HTML entries, each loading a
+  script from `src/entries/`.
 - `src/apps/` — the tools. Per-tool logic in `src/apps/batch/` (`storage.js`),
   `src/apps/imageChain/` (`chain.js` — the step model, `storage.js`),
   `src/apps/batchVideo/` (`items.js`, `storage.js`), `src/apps/video/`
-  (`frames.js` — end-frame extraction via off-screen `<video>` + canvas) and
+  (`frames.js` — end-frame extraction via off-screen `<video>` + canvas),
+  `src/apps/effects/` (Video Effects: `gl.js` — WebGL2 helpers, `engine.js` —
+  the render engine reading frames from the shared `<video>` element; effects
+  COMBINE: the engine runs a chain where each enabled effect's output texture
+  feeds the next one's `u_tex`, with stateful resources — history atlas,
+  feedback, sim, particles — allocated per effect id, and `effects.js` — the 20
+  effect definitions: UI metadata + GLSL ES 3.00 fragment shaders; effect-card
+  preview thumbnails go in `public/effect-previews/<effect-id>.jpg`, gradient
+  placeholder until then) and
   `src/apps/chatBox/` (`ChatBox.jsx` — the box itself, `design.js` — the numbers
   it is built from, `scene.js` — the same box painted on a canvas, `timeline.js`
   — what it is doing at a given millisecond, `audio.js` — the typing sound
@@ -123,6 +138,17 @@ HTML.
   what is persisted, a run's progress, the tab title), `useGenerationRun.js`
   (the hook every generation tool shares) and `download.js` (single-file and zip
   downloads).
+- `src/shared/videoExport/` — reusable in-browser video RE-PROCESSING pipeline
+  (decode an existing file → optional per-frame render callback → encode →
+  MP4), used by Video Effects: `exportVideo.js` (the orchestrator — see its
+  header for the contract), `mp4FrameSource.js` (mp4box.js demux + WebCodecs
+  VideoDecoder, faster than realtime, AAC passthrough, rotation metadata baked
+  in), `seekFrameSource.js` (fallback for non-MP4 sources via `<video>`
+  seeking), `mp4Sink.js` (VideoEncoder + mp4-muxer; H.264 → VP9 → AV1). It
+  complements `videoEncode.js` (which encodes frames a tool painted itself);
+  this one starts from a source video. Callers should lazy-`import()` it (it
+  pulls in mp4box) and fall back to realtime MediaRecorder capture when
+  WebCodecs is missing.
 - `server/` — `index.js` (serves `dist/`, proxies Replicate), `proxy.js` (the
   proxy's request policy), `routes.js` (the route table).
 - `test/` Vitest suites · `docs/` a README screenshot · `Dockerfile` + `fly.toml`

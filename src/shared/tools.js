@@ -31,6 +31,11 @@ export const TOOLS = [
     label: 'Video Chain',
     blurb: 'Clips chained into one continuous shot.',
   },
+  {
+    path: '/video-effects',
+    label: 'Video Effects',
+    blurb: 'Real-time WebGL effects on a video, fully in the browser.',
+  },
 ];
 
 export const toolLabel = (path) => TOOLS.find((t) => t.path === path)?.label || '';

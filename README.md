@@ -89,6 +89,15 @@ it stopped (until those links expire).
   set number of clips, or review each and continue, retry or stop.
   Both video tools share a model catalogue: Veo 3.1 and 3.1 Fast, Kling v3,
   Seedance 2.0, Hailuo 2.3 Fast, Wan 2.7 i2v.
+- **Video Effects** (`/video-effects`) — applies real-time WebGL effects to an
+  uploaded video, 100% in the browser: no Replicate, no API key, nothing
+  uploaded. Original and processed video side by side, playing in sync from one
+  set of controls. Twenty effects (dither, halftone, pixel sort, VHS, CRT,
+  reaction-diffusion, particles…), each with four tweakable parameters, and they
+  combine — enable several and each feeds into the next. Clicking the processed
+  side exports a full-resolution MP4, faster than realtime, with WebCodecs
+  (audio passed through, phone-footage rotation handled); browsers without
+  WebCodecs fall back to a realtime WebM recording.
 - **Chat Box Studio** (`/prompt`) — the one tool that asks nothing of Replicate.
   It records the chat box being used, as a video file at whatever resolution a
   reel or a post wants: images dropping into the box one by one, the message

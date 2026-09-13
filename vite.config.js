@@ -20,6 +20,7 @@ export default defineConfig({
         'image-chain': 'image-chain.html',
         'video-chain': 'video-chain.html',
         'batch-videos': 'batch-videos.html',
+        'video-effects': 'video-effects.html',
       },
     },
   },
