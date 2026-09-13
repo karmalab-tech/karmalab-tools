@@ -3,6 +3,7 @@ import {
   ApiKeyModal,
   Brand,
   Button,
+  DownloadModal,
   ImageDrop,
   Input,
   Panel,
@@ -21,7 +22,7 @@ import {
   SELECT_CHEVRON,
 } from '../shared/fields.js';
 import { loadApiKey, loadOpenaiKey } from '../shared/apiKey.js';
-import { downloadUrl, downloadZip } from '../shared/download.js';
+import { downloadUrl, downloadZip, expiredMessage, triggerDownload } from '../shared/download.js';
 import { useCachedImage } from '../shared/useCachedImage.js';
 import { useGenerationRun } from '../shared/useGenerationRun.js';
 import {
@@ -37,6 +38,7 @@ import {
   extractOutputUrl,
   friendlyErrorMessage,
 } from '../shared/replicate.js';
+import { buildImageVideo } from '../shared/imageVideo.js';
 import { loadKey, saveKey, storage } from './batch/storage.js';
 
 const firstAspect = (modelKey) => MODEL_CONFIGS[modelKey].aspectOptions[0].value;
@@ -104,7 +106,7 @@ export default function BatchImageStudio() {
   const [promptsText, setPromptsText] = useState('');
   const [isRunning, setIsRunning] = useState(false);
   const [runHint, setRunHint] = useState({ text: '', isError: false });
-  const [downloadLabel, setDownloadLabel] = useState('Download all (.zip)');
+  const [downloadOpen, setDownloadOpen] = useState(false);
 
   const cancelRef = useRef(false);
   const counterRef = useRef(0);
@@ -161,7 +163,6 @@ export default function BatchImageStudio() {
     }
 
     setRunHint({ text: '', isError: false });
-    setDownloadLabel('Download all (.zip)');
     cancelRef.current = false;
     setIsRunning(true);
 
@@ -245,24 +246,28 @@ export default function BatchImageStudio() {
 
   // Replicate deletes a result an hour after it was made, so anything the cache
   // missed can be gone by download time. Say which, rather than handing over a
-  // zip that is quietly short.
-  async function downloadAll() {
-    setDownloadLabel('Zipping…');
-    try {
-      const { missing } = await downloadZip(
-        'karmalab-images.zip',
-        succeeded.map((r) => ({ name: imageName(r), url: r.outputUrl, key: gen.outputKey(r) }))
-      );
-      if (missing.length) {
-        setRunHint({
-          text: `${missing.length} of ${succeeded.length} could not be included — Replicate deletes results an hour after they are made, and these were not cached.`,
-          isError: true,
-        });
-      }
-    } catch (e) {
-      alert('Could not build the zip file: ' + e.message);
-    }
-    setDownloadLabel('Download all (.zip)');
+  // zip that is quietly short — the modal shows what is thrown here.
+  async function downloadImages() {
+    const { missing } = await downloadZip(
+      'karmalab-images.zip',
+      succeeded.map((r) => ({ name: imageName(r), url: r.outputUrl, key: gen.outputKey(r) }))
+    );
+    if (missing.length) throw new Error(expiredMessage(missing));
+  }
+
+  // The run's images as one video, each held for the same moment, in prompt
+  // order. Built here in the browser (src/shared/imageVideo.js), the same way
+  // the Image Chain Studio builds one out of a chain.
+  async function downloadVideo({ msPerImage, loop, onProgress }) {
+    const { blob, extension } = await buildImageVideo({
+      sources: succeeded.map((r) => ({ url: r.outputUrl, key: gen.outputKey(r) })),
+      msPerImage,
+      loop,
+      onProgress,
+    });
+    const url = URL.createObjectURL(blob);
+    triggerDownload(url, `karmalab-images-${msPerImage}ms${loop ? '-loop' : ''}.${extension}`);
+    URL.revokeObjectURL(url);
   }
 
   return (
@@ -437,10 +442,10 @@ export default function BatchImageStudio() {
             succeeded.length > 0 ? (
               <Button
                 variant="secondary"
-                onClick={downloadAll}
+                onClick={() => setDownloadOpen(true)}
                 style={{ padding: '8px 16px', fontSize: 13 }}
               >
-                {downloadLabel}
+                Download…
               </Button>
             ) : null
           }
@@ -465,6 +470,15 @@ export default function BatchImageStudio() {
         onClose={() => setKeyModalOpen(false)}
       />
       <RunHistoryModal {...gen.historyModal} />
+      <DownloadModal
+        open={downloadOpen}
+        title="Download the images"
+        imageCount={succeeded.length}
+        zipHelp="Every image as a PNG, numbered in prompt order."
+        onClose={() => setDownloadOpen(false)}
+        onDownloadVideo={downloadVideo}
+        onDownloadZip={downloadImages}
+      />
     </div>
   );
 }

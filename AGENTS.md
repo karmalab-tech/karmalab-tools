@@ -10,7 +10,9 @@ Replicate models, built with **React + Vite** and served by a small Node server
 that also proxies the Replicate API.
 
 - **Batch Image Studio** (`/`) — one image per text prompt, in batch. The
-  flagship tool.
+  flagship tool. The finished run downloads as the images in a zip, or as one
+  video with each image held for a set number of milliseconds — the same
+  download modal the Image Chain Studio has.
 - **Image Chain Studio** (`/image-chain`) — chains images: each step is
   generated from the previous step's image as its reference. Run it again and it
   adds more steps to the same chain, always continuing from the last step that
@@ -85,8 +87,7 @@ HTML.
 - `index.html` / `image-chain.html` / `batch-videos.html` / `video-chain.html` /
   `prompt.html` — Vite HTML entries, each loading a script from `src/entries/`.
 - `src/apps/` — the tools. Per-tool logic in `src/apps/batch/` (`storage.js`),
-  `src/apps/imageChain/` (`chain.js` — the step model, `video.js` — stitching the
-  chain into one video, `DownloadModal.jsx`, `storage.js`),
+  `src/apps/imageChain/` (`chain.js` — the step model, `storage.js`),
   `src/apps/batchVideo/` (`items.js`, `storage.js`) and `src/apps/video/`
   (`frames.js` — end-frame extraction via off-screen `<video>` + canvas).
 - `src/shared/` — what the tools are built from: `theme.css` (the Tailwind
@@ -99,7 +100,9 @@ HTML.
   by two tools), `storage.js`
   (`createToolStorage(namespace)` — namespaced `localStorage` plus the
   current-run / run-history persistence, one prefix per tool), `apiKey.js`, `fields.js`,
-  `useUnloadGuard.js`, plus the run machinery: `runs.js` (the run/item model —
+  `useUnloadGuard.js`, `imageVideo.js` (stitching a list of images into one
+  video — both image tools download that way, through the shared
+  `components/DownloadModal.jsx`), plus the run machinery: `runs.js` (the run/item model —
   what is persisted, a run's progress, the tab title), `useGenerationRun.js`
   (the hook every generation tool shares) and `download.js` (single-file and zip
   downloads).
@@ -191,9 +194,9 @@ outputs are now on disk locally, and the History modal says so.
   could not find anywhere; the tools surface that instead of handing over a zip
   that is quietly three images light.
 
-## Stitching a chain into a video
+## Stitching images into a video
 
-`src/apps/imageChain/video.js` turns a finished image chain into one video, in
+`src/shared/imageVideo.js` turns a list of finished images into one video, in
 the browser: each image is drawn on a canvas, held for the chosen number of
 milliseconds, encoded with **WebCodecs** and muxed by `mp4-muxer` or
 `webm-muxer` (both imported on demand, like JSZip, so nothing loads until the
@@ -214,9 +217,16 @@ Three things there are less obvious than they look:
   without one repeat of the final image, timed one hold later, the file claims
   to be a frame short and players cut the last image off. `mp4-muxer` adds the
   last sample's own duration, so the MP4 path must _not_ do this.
-- **Looping stops one short.** The frame order for a loop is the chain forwards
+- **Looping stops one short.** The frame order for a loop is the list forwards
   then back down it, ending on the second image: the player's own loop supplies
   the return to the first, so it doesn't sit on a doubled frame at the seam.
+
+Both image tools reach it through `src/shared/components/DownloadModal.jsx`,
+which is the whole download UI — the duration, the loop, the zip, the encoder
+this browser turned out to have — and takes the wording that differs (a chain's
+steps in chain order, a batch's images in prompt order) as props. The Image
+Chain Studio orders the images by step, the Batch Image Studio by prompt;
+nothing else about the two downloads differs.
 
 ## What the proxy allows, and why
 
@@ -285,7 +295,7 @@ encoder, so it exercised the WebM path; the MP4 path's timing was checked
 separately against `mp4-muxer` directly (four 120ms samples → a 480ms file),
 and a real H.264 encode still wants a look on a browser that has one.
 
-`src/apps/video/frames.js` and `src/apps/imageChain/video.js` have **no**
+`src/apps/video/frames.js` and `src/shared/imageVideo.js` have **no**
 automated coverage of the media parts — jsdom can't decode video and the node
 environment has no WebCodecs, so a test there would assert nothing meaningful;
 they want a Playwright test. It's the subtlest code in the repo, so changes need manual verification in

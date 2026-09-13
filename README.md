@@ -58,8 +58,12 @@ it stopped (until those links expire).
 
 - **Batch Image Studio** (`/`) — paste a list of prompts, one per line, pick a
   model, generate them all. Runs three at a time, with an optional shared prompt
-  suffix and reference image. Downloads individually or as a zip, and remembers
-  in-flight generations so closing the tab and coming back resumes them.
+  suffix and reference image. Downloads one at a time from its card, or the whole
+  run at once — either as one **video**, every image held for a duration you
+  choose (200ms by default) and optionally playing back down the run so it loops
+  without a jump, or as the **images** in a zip. The video is encoded in your
+  browser with WebCodecs — nothing is uploaded. It also remembers in-flight
+  generations, so closing the tab and coming back resumes them.
   Models: GPT Image 1 and 2, Flux 1.1 Pro, Flux Kontext Pro, Ideogram v3 Turbo,
   Recraft v3, Stable Diffusion 3.5 Large.
 - **Image Chain Studio** (`/image-chain`) — chains images instead of batching
@@ -73,8 +77,8 @@ it stopped (until those links expire).
   and **Delete** (take it out of the chain), so one bad step doesn't cost you the
   run. The finished chain downloads either as one **video**, every image held for
   a duration you choose (200ms by default) and optionally looping back down the
-  chain so it repeats without a jump, or as the **images** in a zip. The video is
-  encoded in your browser with WebCodecs — nothing is uploaded.
+  chain so it repeats without a jump, or as the **images** in a zip — the same
+  download modal the Batch Image Studio has.
   Models: the image models that take a reference image.
 - **Batch Video Studio** (`/batch-videos`) — the same idea for video, in two
   modes: one video per prompt line (with an optional shared start frame), or one
