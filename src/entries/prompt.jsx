@@ -1,9 +1,9 @@
 import { StrictMode } from 'react';
 import { createRoot } from 'react-dom/client';
-import PromptBox from '../apps/PromptBox.jsx';
+import ChatBoxStudio from '../apps/ChatBoxStudio.jsx';
 
 createRoot(document.getElementById('root')).render(
   <StrictMode>
-    <PromptBox />
+    <ChatBoxStudio />
   </StrictMode>
 );

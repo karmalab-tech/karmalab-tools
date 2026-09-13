@@ -2,9 +2,10 @@
 //
 // `server/routes.js` stays the source of truth for which tools *exist* — this
 // is what the UI puts in front of someone, which is not quite the same list:
-// the Prompt Box is a styling mockup and is deliberately left out. A test keeps
-// the two honest, so a tool renamed or moved in the route table can't leave a
-// dead link here.
+// the Chat Box Studio (`/prompt`) is left out, as the Prompt Box mockup it grew
+// out of was. It is a real tool now, but an unlisted one — reached by its URL by
+// the person who asked for it. A test keeps the two lists honest, so a tool
+// renamed or moved in the route table can't leave a dead link here.
 //
 // `blurb` is the line under each name in the tools sidebar. One short sentence:
 // what the tool does, not how.

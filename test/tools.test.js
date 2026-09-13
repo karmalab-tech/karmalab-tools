@@ -38,6 +38,21 @@ import {
   parseDurationMs,
   totalDurationMs,
 } from '../src/apps/imageChain/video.js';
+import {
+  DEFAULTS,
+  LIMITS,
+  clampSetting,
+  keystrokeTimes,
+  planRecording,
+  stateAt,
+} from '../src/apps/chatBox/timeline.js';
+import {
+  RESOLUTION_PRESETS,
+  SIZE_LIMITS,
+  extensionForType,
+  parseSize,
+  recordingBasename,
+} from '../src/apps/chatBox/scene.js';
 
 const base = { promptText: 'a cat', suffix: '', aspect: '1:1', extraValues: {} };
 
@@ -872,7 +887,7 @@ describe('the tools in the navigation', () => {
     TOOLS.forEach((tool) => expect(paths).toContain(tool.path));
   });
 
-  it('leaves out the Prompt Box mockup', () => {
+  it('leaves out the unlisted Chat Box Studio', () => {
     expect(TOOLS.map((t) => t.path)).not.toContain('/prompt');
   });
 
@@ -945,5 +960,117 @@ describe('formatBytes', () => {
     expect(formatBytes(2 * 1024 * 1024)).toBe('2.0 MB');
     expect(formatBytes(400 * 1024)).toBe('400 KB');
     expect(formatBytes(250 * 1024 * 1024)).toBe('250 MB');
+  });
+});
+
+// The Chat Box Studio's arithmetic: what the recording's timeline looks like at
+// a given millisecond, and the frame it is painted into. The painting and the
+// encoding themselves need a canvas and WebCodecs, so they are verified in a
+// browser (see AGENTS.md) — this is the part that can be pinned down here.
+describe('the chat box recording timeline', () => {
+  const plan = (over) => planRecording({ text: 'hello', cps: 10, seed: 3, ...over });
+
+  it('adds up the four stretches of the recording', () => {
+    const p = plan({ startDelayMs: 500, pauseBeforeSendMs: 300, waitAfterSendMs: 2000 });
+    expect(p.typingStartMs).toBe(500);
+    expect(p.sendAtMs).toBeCloseTo(500 + p.typingMs + 300, 5);
+    expect(p.totalMs).toBeCloseTo(p.sendAtMs + 2000, 5);
+  });
+
+  it('types at about the speed it was asked for', () => {
+    const text = 'a'.repeat(60); // no punctuation, so nothing pauses
+    const p = planRecording({ text, cps: 20, startDelayMs: 0, seed: 1 });
+    // 60 characters at 20 a second is three seconds, give or take the jitter.
+    expect(p.typingMs).toBeGreaterThan(2600);
+    expect(p.typingMs).toBeLessThan(3400);
+  });
+
+  it('is the same recording every time, for the same settings', () => {
+    expect(keystrokeTimes('hello there', 12, 7)).toEqual(keystrokeTimes('hello there', 12, 7));
+    expect(keystrokeTimes('hello there', 12, 7)).not.toEqual(keystrokeTimes('hello there', 12, 8));
+  });
+
+  it('breathes at a full stop', () => {
+    const [a, b] = [keystrokeTimes('ab', 10, 1), keystrokeTimes('a.b', 10, 1)];
+    // The third character lands later than the second when a full stop is in
+    // the way, even though it is only one character further along.
+    expect(b[2] - b[1]).toBeGreaterThan(a[1] - a[0]);
+  });
+
+  it('shows an empty box before it starts, and the whole message at the send', () => {
+    const p = plan({ startDelayMs: 500 });
+    expect(stateAt(0, p)).toMatchObject({ charCount: 0, phase: 'idle', sending: false });
+    expect(stateAt(p.sendAtMs, p)).toMatchObject({
+      text: 'hello',
+      phase: 'sending',
+      sending: true,
+    });
+    expect(stateAt(p.totalMs, p).sending).toBe(true);
+  });
+
+  it('never un-types a character', () => {
+    const p = plan({});
+    let last = 0;
+    for (let ms = 0; ms <= p.totalMs; ms += 16) {
+      const { charCount } = stateAt(ms, p);
+      expect(charCount).toBeGreaterThanOrEqual(last);
+      last = charCount;
+    }
+    expect(last).toBe(5);
+  });
+
+  it('holds the caret solid while typing, and drops it at the send', () => {
+    const p = plan({ startDelayMs: 0 });
+    expect(stateAt(p.typingMs / 2, p).caretOn).toBe(true);
+    expect(stateAt(p.sendAtMs + 100, p).caretOn).toBe(false);
+  });
+
+  it('counts the frames the encoder will be asked for', () => {
+    const p = planRecording({
+      text: 'hi',
+      cps: 10,
+      fps: 30,
+      startDelayMs: 0,
+      pauseBeforeSendMs: 0,
+      waitAfterSendMs: 1000,
+    });
+    expect(p.frameCount).toBe(Math.round((p.totalMs / 1000) * 30));
+  });
+
+  it('clamps a settings box that is empty, silly or not a number', () => {
+    expect(clampSetting('', LIMITS.cps, DEFAULTS.cps)).toBe(DEFAULTS.cps);
+    expect(clampSetting('abc', LIMITS.cps, DEFAULTS.cps)).toBe(DEFAULTS.cps);
+    expect(clampSetting('-4', LIMITS.cps, DEFAULTS.cps)).toBe(LIMITS.cps[0]);
+    expect(clampSetting('900', LIMITS.cps, DEFAULTS.cps)).toBe(LIMITS.cps[1]);
+    expect(clampSetting('18', LIMITS.cps, DEFAULTS.cps)).toBe(18);
+  });
+});
+
+describe('the chat box recording frame', () => {
+  it('keeps a resolution even — H.264 will not take an odd one', () => {
+    expect(parseSize('1081', 1080)).toBe(1080);
+    expect(parseSize('1080', 1080)).toBe(1080);
+  });
+
+  it('falls back and clamps rather than trusting the box', () => {
+    expect(parseSize('', 1080)).toBe(1080);
+    expect(parseSize('nope', 720)).toBe(720);
+    expect(parseSize('10', 1080)).toBe(SIZE_LIMITS[0]);
+    expect(parseSize('99999', 1080)).toBe(SIZE_LIMITS[1]);
+  });
+
+  it('offers the shapes a reel is cut to', () => {
+    expect(RESOLUTION_PRESETS.some((p) => p.width === 1080 && p.height === 1920)).toBe(true);
+    RESOLUTION_PRESETS.forEach((p) => {
+      expect(p.width % 2).toBe(0);
+      expect(p.height % 2).toBe(0);
+    });
+  });
+
+  it('names the download after the frame, and the file after its container', () => {
+    expect(recordingBasename(1080, 1920)).toBe('karmalab-chat-box-1080x1920');
+    expect(extensionForType('video/webm')).toBe('webm');
+    expect(extensionForType('video/mp4')).toBe('mp4');
+    expect(extensionForType(undefined)).toBe('mp4');
   });
 });

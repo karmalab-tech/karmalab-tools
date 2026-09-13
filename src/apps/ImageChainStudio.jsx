@@ -22,7 +22,7 @@ import {
 } from '../shared/fields.js';
 import { loadApiKey, loadOpenaiKey } from '../shared/apiKey.js';
 import { downloadUrl, downloadZip, triggerDownload } from '../shared/download.js';
-import { useCachedImage } from '../shared/useCachedImage.js';
+import { useCachedOutput } from '../shared/useCachedOutput.js';
 import { useGenerationRun } from '../shared/useGenerationRun.js';
 import {
   CHAIN_MODEL_KEYS,
@@ -96,7 +96,7 @@ function StepCard({ step, busy, cacheKey, onRetry, onDelete }) {
   const { index, label, status, outputUrl, error, from } = step;
   // The cached copy where there is one: a chain older than an hour has nothing
   // left at its Replicate URL, and the cards would all be broken images.
-  const src = useCachedImage(cacheKey, outputUrl);
+  const src = useCachedOutput(cacheKey, outputUrl);
 
   async function download() {
     setDownloading(true);

@@ -34,7 +34,7 @@ export const routes = [
   {
     path: '/prompt',
     file: 'prompt.html',
-    title: 'Prompt Box',
-    description: 'Hi Karma prompt box mockup.',
+    title: 'Chat Box Studio',
+    description: 'Record the chat box typing a message, as a video, at any resolution.',
   },
 ];

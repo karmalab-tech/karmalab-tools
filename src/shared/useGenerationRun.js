@@ -25,6 +25,11 @@ import { useUnloadGuard } from './useUnloadGuard.js';
 //
 // Options:
 //   storage       — a createToolStorage(namespace) instance (one per tool)
+//   remote        — false for a tool whose items are made in the browser rather
+//                   than on Replicate (the Chat Box Studio records a video
+//                   locally). There is nothing upstream to ask about such an
+//                   item, so a run is never refreshed, and one interrupted by a
+//                   closed tab is closed out instead of resumed.
 //   pollOptions   — poll profile for resumed predictions (VIDEO_POLL for video)
 //   guard         — also warn on tab close while this is true (the video chain
 //                   waiting on a review still has state to lose)
@@ -33,6 +38,7 @@ import { useUnloadGuard } from './useUnloadGuard.js';
 //   onNotice      — (text, isError) => void, for the tool's own hint line
 export function useGenerationRun({
   storage,
+  remote = true,
   pollOptions,
   guard = false,
   missingOutput = 'No output returned by the model.',
@@ -215,6 +221,9 @@ export function useGenerationRun({
   // one marked failed while the prediction went on to finish on Replicate.
   const refreshRun = useCallback(
     async ({ storedItems, restored, hint = '' }) => {
+      // Nothing was ever created upstream for a local tool's items, so there is
+      // nothing to bring back in line.
+      if (!remote) return;
       const stale = storedItems.filter((it) => it.status !== 'succeeded');
       if (!stale.length) return;
       const key = loadApiKey().trim();
@@ -236,7 +245,7 @@ export function useGenerationRun({
       notify([`${succeeded} of ${storedItems.length} finished.`, hint].filter(Boolean).join(' '));
       if (restored) requestFinish();
     },
-    [notify, refreshItem, requestFinish]
+    [notify, refreshItem, remote, requestFinish]
   );
 
   // On open: load the history list, and if a run was still going when the tab
@@ -255,6 +264,22 @@ export function useGenerationRun({
       return;
     }
 
+    // A local tool's run had no help from a server: whatever was being made
+    // when the tab closed is simply gone, so the run is closed out and shelved
+    // rather than put back on screen to wait for something that will not land.
+    if (!remote) {
+      storage.archiveRun({
+        ...stored,
+        items: stored.items.map((it) =>
+          isActiveItem(it)
+            ? { ...it, status: 'failed', error: 'Interrupted when the tab closed.' }
+            : it
+        ),
+      });
+      setHistory(storage.loadHistory());
+      return;
+    }
+
     setRun({
       id: stored.id,
       title: stored.title,
@@ -266,7 +291,7 @@ export function useGenerationRun({
     refreshRun({ storedItems: stored.items, restored: true, hint: restoreHint });
     // Once per mount — `loadedRef` above, not an empty dependency list, so the
     // deps stay honest.
-  }, [refreshRun, restoreHint, storage]);
+  }, [refreshRun, remote, restoreHint, storage]);
 
   const startRun = useCallback(
     ({ title, items: initialItems = [] }) => {
