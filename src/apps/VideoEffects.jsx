@@ -210,11 +210,12 @@ export default function VideoEffects() {
   function loadFile(file) {
     if (videoUrl) URL.revokeObjectURL(videoUrl);
     fileRef.current = file;
-    // createObjectURL can only produce blob: URLs, but assert the scheme
-    // anyway so nothing script-capable can ever reach the <video> src (and so
-    // code scanning can see the uploaded file's URL is sanitized).
-    const url = URL.createObjectURL(file);
-    setVideoUrl(/^blob:/.test(url) ? url : null);
+    // createObjectURL can only produce blob: URLs — no HTML metacharacters,
+    // no script-capable scheme. Scrub and assert both anyway so the invariant
+    // holds by construction (and is visible to code scanning) before the URL
+    // reaches the <video> src.
+    const url = URL.createObjectURL(file).replace(/[<>"'&]/g, '');
+    setVideoUrl(url.startsWith('blob:') ? url : null);
     setVideoName(file.name);
     setPlaying(false);
     setDuration(0);
