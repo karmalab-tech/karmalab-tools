@@ -1,8 +1,8 @@
 // Encoding video in the browser, shared by the tools that make one.
 //
-// Two tools build a video locally rather than fetching one from a model: the
-// Image Chain Studio stitches a chain's images into a clip
-// (src/apps/imageChain/video.js), and the Chat Box Studio records the chat box
+// Two things here build a video locally rather than fetching one from a model:
+// src/shared/imageVideo.js stitches a list of images into a clip (both image
+// tools download a run that way), and the Chat Box Studio records the chat box
 // typing (src/apps/chatBox/record.js). Both draw frames on a canvas, encode
 // them with **WebCodecs** and mux the result with `mp4-muxer` or `webm-muxer`
 // (imported on demand, like JSZip, so nothing loads until a video is actually

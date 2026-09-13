@@ -14,7 +14,7 @@
 // every new line.
 //
 // Like the rest of the browser-media code in this repo (src/apps/video/frames.js,
-// src/apps/imageChain/video.js) the painting itself has no automated coverage —
+// src/shared/imageVideo.js) the painting itself has no automated coverage —
 // node has no canvas — so the parts that are arithmetic (the frame size, the
 // layout, the line wrapping) are exported separately and unit-tested, and the
 // picture is checked by looking at it.

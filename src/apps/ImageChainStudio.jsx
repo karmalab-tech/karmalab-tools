@@ -3,6 +3,7 @@ import {
   ApiKeyModal,
   Brand,
   Button,
+  DownloadModal,
   ImageDrop,
   Input,
   Panel,
@@ -21,7 +22,7 @@ import {
   SELECT_CHEVRON,
 } from '../shared/fields.js';
 import { loadApiKey, loadOpenaiKey } from '../shared/apiKey.js';
-import { downloadUrl, downloadZip, triggerDownload } from '../shared/download.js';
+import { downloadUrl, downloadZip, expiredMessage, triggerDownload } from '../shared/download.js';
 import { useCachedOutput } from '../shared/useCachedOutput.js';
 import { useGenerationRun } from '../shared/useGenerationRun.js';
 import {
@@ -48,19 +49,10 @@ import {
   stepId,
   stepLabel,
 } from './imageChain/chain.js';
-import { DownloadModal } from './imageChain/DownloadModal.jsx';
-import { buildChainVideo } from './imageChain/video.js';
+import { buildImageVideo } from '../shared/imageVideo.js';
 import { loadKey, saveKey, storage } from './imageChain/storage.js';
 
 const needsOpenaiKey = (cfg) => (cfg.extraFields || []).some((f) => f.type === 'apiKey');
-
-// What to say when a zip comes up short. Replicate deletes results an hour
-// after they are made, so this is what an old chain looks like when its images
-// were never cached (a browser with no IndexedDB, or a cache since evicted).
-const expiredMessage = (missing) =>
-  `${missing.length} ${missing.length === 1 ? 'image' : 'images'} could not be included — ` +
-  'Replicate deletes results an hour after they are made, and these were not cached. ' +
-  `Missing: ${missing.join(', ')}`;
 
 // What the tool opens on: an image-to-image editing model, which is what a
 // chain wants — every step is handed the previous image and asked to take it
@@ -433,9 +425,9 @@ export default function ImageChainStudio() {
   }
 
   // Stitch the chain into one video: every image held for the same moment, in
-  // chain order. Built here in the browser (src/apps/imageChain/video.js).
+  // chain order. Built here in the browser (src/shared/imageVideo.js).
   async function downloadVideo({ msPerImage, loop, onProgress }) {
-    const { blob, extension } = await buildChainVideo({
+    const { blob, extension } = await buildImageVideo({
       sources: succeeded.map((s) => ({ url: s.outputUrl, key: gen.outputKey(s) })),
       msPerImage,
       loop,
@@ -676,7 +668,10 @@ export default function ImageChainStudio() {
       <RunHistoryModal {...gen.historyModal} />
       <DownloadModal
         open={downloadOpen}
+        title="Download the chain"
         imageCount={succeeded.length}
+        loopHelp="Plays down the chain and back up it, so the video loops without a jump."
+        zipHelp="Every step as a PNG, numbered in chain order."
         onClose={() => setDownloadOpen(false)}
         onDownloadVideo={downloadVideo}
         onDownloadZip={downloadImages}

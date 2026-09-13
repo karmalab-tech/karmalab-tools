@@ -38,7 +38,7 @@ import {
   frameSequence,
   parseDurationMs,
   totalDurationMs,
-} from '../src/apps/imageChain/video.js';
+} from '../src/shared/imageVideo.js';
 import {
   DEFAULTS,
   DROP_MS,
@@ -847,9 +847,10 @@ describe('a step download name', () => {
   });
 });
 
-// Stitching a chain into one video. Only the parts that are arithmetic are
-// covered — the encoding itself drives WebCodecs and a canvas, which the node
-// test environment has none of, so it is verified in a real browser instead.
+// Stitching a list of images into one video — a chain, or a batch run's
+// results. Only the parts that are arithmetic are covered — the encoding itself
+// drives WebCodecs and a canvas, which the node test environment has none of,
+// so it is verified in a real browser instead.
 describe('the video frame order', () => {
   it('is the chain, in order', () => {
     expect(frameSequence(4, false)).toEqual([0, 1, 2, 3]);

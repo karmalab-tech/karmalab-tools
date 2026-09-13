@@ -10,7 +10,9 @@ Replicate models, built with **React + Vite** and served by a small Node server
 that also proxies the Replicate API.
 
 - **Batch Image Studio** (`/`) — one image per text prompt, in batch. The
-  flagship tool.
+  flagship tool. The finished run downloads as the images in a zip, or as one
+  video with each image held for a set number of milliseconds — the same
+  download modal the Image Chain Studio has.
 - **Image Chain Studio** (`/image-chain`) — chains images: each step is
   generated from the previous step's image as its reference. Run it again and it
   adds more steps to the same chain, always continuing from the last step that
@@ -93,8 +95,7 @@ HTML.
 - `index.html` / `image-chain.html` / `batch-videos.html` / `video-chain.html` /
   `prompt.html` — Vite HTML entries, each loading a script from `src/entries/`.
 - `src/apps/` — the tools. Per-tool logic in `src/apps/batch/` (`storage.js`),
-  `src/apps/imageChain/` (`chain.js` — the step model, `video.js` — stitching the
-  chain into one video, `DownloadModal.jsx`, `storage.js`),
+  `src/apps/imageChain/` (`chain.js` — the step model, `storage.js`),
   `src/apps/batchVideo/` (`items.js`, `storage.js`), `src/apps/video/`
   (`frames.js` — end-frame extraction via off-screen `<video>` + canvas) and
   `src/apps/chatBox/` (`ChatBox.jsx` — the box itself, `design.js` — the numbers
@@ -113,13 +114,15 @@ HTML.
   by two tools), `storage.js`
   (`createToolStorage(namespace)` — namespaced `localStorage` plus the
   current-run / run-history persistence, one prefix per tool), `apiKey.js`, `fields.js`,
-  `useUnloadGuard.js`, `videoEncode.js` (the WebCodecs encoder plumbing the two
-  tools that build a video locally share — which codec and container this
-  browser has, the muxer, the encode queue, and the audio track when there is
-  one), plus the run machinery: `runs.js`
-  (the run/item model — what is persisted, a run's progress, the tab title),
-  `useGenerationRun.js` (the hook every generation tool shares) and
-  `download.js` (single-file and zip downloads).
+  `useUnloadGuard.js`, `imageVideo.js` (stitching a list of images into one
+  video — both image tools download that way, through the shared
+  `components/DownloadModal.jsx`), `videoEncode.js` (the WebCodecs encoder
+  plumbing every tool that builds a video locally shares — which codec and
+  container this browser has, the muxer, the encode queue, and the audio track
+  when there is one), plus the run machinery: `runs.js` (the run/item model —
+  what is persisted, a run's progress, the tab title), `useGenerationRun.js`
+  (the hook every generation tool shares) and `download.js` (single-file and zip
+  downloads).
 - `server/` — `index.js` (serves `dist/`, proxies Replicate), `proxy.js` (the
   proxy's request policy), `routes.js` (the route table).
 - `test/` Vitest suites · `docs/` a README screenshot · `Dockerfile` + `fly.toml`
@@ -218,15 +221,16 @@ where a run id normally does, so clearing the history leaves it alone.
 
 ## Making a video in the browser
 
-Two tools build a video locally rather than fetching one from a model: the Image
-Chain Studio stitches a chain's images into a clip
-(`src/apps/imageChain/video.js`) and the Chat Box Studio records the chat box
-(`src/apps/chatBox/record.js`). Both draw frames on a canvas, encode them with
-**WebCodecs** and mux them with `mp4-muxer` or `webm-muxer` (imported on demand,
-like JSZip, so nothing loads until a video is actually asked for). No upload, no
-ffmpeg-sized dependency, same trust model as the rest of the app. What they
-share — picking an encoding, the muxer, draining the encode queue — is
-`src/shared/videoEncode.js`; what differs is the frames.
+Two things here build a video locally rather than fetching one from a model:
+`src/shared/imageVideo.js` turns a list of finished images into one clip — each
+held for the chosen number of milliseconds, which is how both image tools
+download a run, through `components/DownloadModal.jsx` — and
+`src/apps/chatBox/record.js` records the chat box. Both draw frames on a canvas,
+encode them with **WebCodecs** and mux them with `mp4-muxer` or `webm-muxer`
+(imported on demand, like JSZip, so nothing loads until a video is actually
+asked for). No upload, no ffmpeg-sized dependency, same trust model as the rest
+of the app. What they share — picking an encoding, the muxer, draining the
+encode queue — is `src/shared/videoEncode.js`; what differs is the frames.
 
 Things there that are less obvious than they look:
 
@@ -250,6 +254,13 @@ Things there that are less obvious than they look:
   the chain forwards then back down it, ending on the second image: the player's
   own loop supplies the return to the first, so it doesn't sit on a doubled
   frame at the seam.
+
+Both image tools reach it through `src/shared/components/DownloadModal.jsx`,
+which is the whole download UI — the duration, the loop, the zip, the encoder
+this browser turned out to have — and takes the wording that differs (a chain's
+steps in chain order, a batch's images in prompt order) as props. The Image
+Chain Studio orders the images by step, the Batch Image Studio by prompt;
+nothing else about the two downloads differs.
 
 ## Recording the chat box
 
@@ -441,7 +452,7 @@ not reachable from that sandbox, so the frames rendered in the fallback face:
 `ensureFonts()` itself is unverified, and worth a look on a machine with the
 fonts.
 
-`src/apps/video/frames.js`, `src/apps/imageChain/video.js` and
+`src/apps/video/frames.js`, `src/shared/imageVideo.js` and
 `src/apps/chatBox/scene.js` + `record.js` have **no** automated coverage of the
 media parts — jsdom can't decode video, and the node environment has no canvas
 and no WebCodecs, so a test there would assert nothing meaningful; they want a

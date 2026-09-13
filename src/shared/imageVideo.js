@@ -1,4 +1,9 @@
-// Stitching a chain's images into one video, in the browser.
+// Stitching a list of images into one video, in the browser.
+//
+// Shared by the two image tools: the Image Chain Studio stitches a chain in
+// chain order, the Batch Image Studio a run's results in prompt order. Neither
+// cares where the images came from — this takes them as a list and holds each
+// one for the same moment.
 //
 // Each image is held on a canvas for the same number of milliseconds, encoded
 // with WebCodecs and muxed into an MP4. The encoder plumbing — which codec and
@@ -16,14 +21,14 @@
 // input parsing) are unit-tested, the encoding is verified by hand in a
 // browser.
 
-import { cachedBlob } from '../../shared/outputCache.js';
+import { cachedBlob } from './outputCache.js';
 import {
   createMuxer,
   drainEncoder,
   pickEncoding,
   stillBitrate,
   videoSupport,
-} from '../../shared/videoEncode.js';
+} from './videoEncode.js';
 
 export { videoSupport };
 
@@ -39,10 +44,10 @@ export function parseDurationMs(raw) {
   return Math.min(ms, MAX_MS_PER_IMAGE);
 }
 
-// The order the images are shown in. Looping plays the chain forwards and then
+// The order the images are shown in. Looping plays the list forwards and then
 // back down it, stopping one short of the first image: the player's own loop
-// supplies that one, so the chain reads as a continuous back-and-forth instead
-// of pausing on a doubled first frame.
+// supplies that one, so it reads as a continuous back-and-forth instead of
+// pausing on a doubled first frame.
 export function frameSequence(count, loop) {
   const forward = Array.from({ length: count }, (_, i) => i);
   if (!loop || count < 3) return forward;
@@ -59,10 +64,10 @@ export const totalDurationMs = (count, msPerImage, loop) =>
 // fetched yet; the file itself is named after what the build actually used.
 export const probeEncoding = () => pickEncoding(640, 640, 5);
 
-// Draw one image centred on the canvas, scaled to fit. A chain's images are
-// normally all the same size, but a model or aspect ratio changed part-way
-// through leaves the odd one out — letterboxing it keeps the video one size
-// rather than failing.
+// Draw one image centred on the canvas, scaled to fit. The images are normally
+// all the same size, but a model or aspect ratio changed part-way through a
+// chain — or a run whose model was switched — leaves the odd one out;
+// letterboxing it keeps the video one size rather than failing.
 function drawContained(ctx, bitmap, width, height) {
   const scale = Math.min(width / bitmap.width, height / bitmap.height);
   const w = Math.round(bitmap.width * scale);
@@ -72,18 +77,18 @@ function drawContained(ctx, bitmap, width, height) {
   ctx.drawImage(bitmap, Math.round((width - w) / 2), Math.round((height - h) / 2), w, h);
 }
 
-// Build the video. `sources` are the images in chain order as
+// Build the video. `sources` are the images, in the order they should play, as
 // { url, key } — the key being their place in the output cache — `msPerImage`
-// how long each is held, `loop` whether to come back down the chain.
+// how long each is held, `loop` whether to play back down the list.
 // `onProgress` is called with { stage, done, total } as it goes. Resolves to
 // { blob, extension, label } — the extension being whichever container the
 // browser could encode.
-export async function buildChainVideo({ sources, msPerImage, loop, onProgress = () => {} }) {
+export async function buildImageVideo({ sources, msPerImage, loop, onProgress = () => {} }) {
   if (!videoSupport()) throw new Error('This browser cannot encode video.');
   if (!sources.length) throw new Error('There are no images to stitch.');
 
-  // Gather every image up front, cache first: an hour after a step ran its
-  // Replicate URL is a link to a deleted file, and the cached copy is the only
+  // Gather every image up front, cache first: an hour after it was generated
+  // its Replicate URL is a link to a deleted file, and the cached copy is the only
   // one left. Decoding from a blob (rather than pointing the canvas at a URL)
   // also keeps the canvas untainted, so the frames can be read back.
   const bitmaps = [];
