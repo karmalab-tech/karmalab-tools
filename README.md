@@ -89,9 +89,11 @@ it stopped (until those links expire).
   It records the chat box being used, as a video file at whatever resolution a
   reel or a post wants: images dropping into the box one by one, the message
   typed at a human speed, the pause, the send. Set the frame, the title above
-  the box, the placeholder, the speed and every pause; add a typing sound and it
-  is heard only while characters are landing, playing through your clip instead
-  of repeating the same second of it. Every frame is painted on a canvas at full
+  the box, the placeholder, the speed and every pause; it comes with the sound of a real
+  keyboard — eight separate bursts of typing, one picked at random per run,
+  played from its first keystroke and cut when the typing stops, so the sound
+  starts and ends with the characters and no two recordings sound alike (or use
+  a clip of your own, or none). Every frame is painted on a canvas at full
   resolution and encoded in the browser (WebCodecs — Chrome or Edge). Not in the
   tools sidebar; it lives at its URL.
 

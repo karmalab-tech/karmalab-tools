@@ -40,8 +40,9 @@ import {
   resolutionLabel,
 } from './chatBox/scene.js';
 import { AUDIO_SAMPLE_RATE, recordChatBox, videoSupport } from './chatBox/record.js';
-import { decodeMono, neededMs, typingRuns, typingTrack } from './chatBox/audio.js';
-import { clearSound, loadSound, saveSound } from './chatBox/sound.js';
+import { decodeClip, typingTrack } from './chatBox/audio.js';
+import { SEQUENCE_COUNT, loadSequences } from './chatBox/sequences.js';
+import { clearSound, loadSound, normalizeChoice, saveSound } from './chatBox/sound.js';
 import {
   DEFAULTS,
   LIMITS,
@@ -85,7 +86,9 @@ const SETTING_KEYS = [
   'pauseBeforeSendMs',
   'waitAfterSendMs',
   'fps',
-  // Only the clip's name: the audio itself is in IndexedDB (chatBox/sound.js).
+  // Which sound, and — for a clip of your own — its name. The audio itself is
+  // in IndexedDB (chatBox/sound.js) or shipped with the app (chatBox/typing/).
+  'soundChoice',
   'soundName',
 ];
 
@@ -104,6 +107,7 @@ const INITIAL = {
   pauseBeforeSendMs: String(DEFAULTS.pauseBeforeSendMs),
   waitAfterSendMs: String(DEFAULTS.waitAfterSendMs),
   fps: String(DEFAULTS.fps),
+  soundChoice: 'builtin',
   soundName: '',
 };
 
@@ -141,9 +145,18 @@ function NumberField({ id, label, value, onChange, help, min, max, step = 1, suf
   );
 }
 
-// Click-or-drop for the typing clip. The sibling of ImagesDrop, which does not
-// take audio — this is the same shape in the same clothes.
-function SoundDrop({ name, sound, disabled, onChoose, onRemove }) {
+// The typing sound: the sequences that ship with the studio, a clip of your
+// own (click or drop, like ImagesDrop, which does not take audio), or silence.
+function SoundDrop({
+  choice,
+  sequenceCount,
+  custom,
+  customName,
+  disabled,
+  onChoose,
+  onChoice,
+  onForget,
+}) {
   const [dragover, setDragover] = useState(false);
   const inputRef = useRef(null);
 
@@ -152,14 +165,27 @@ function SoundDrop({ name, sound, disabled, onChoose, onRemove }) {
     if (file) onChoose(file);
   };
 
+  const title =
+    choice === 'off'
+      ? 'No sound'
+      : choice === 'custom'
+        ? customName || 'Your typing clip'
+        : 'Built-in keyboard';
+  const detail =
+    choice === 'off'
+      ? 'Click or drop an audio file to use your own'
+      : choice === 'custom' && custom
+        ? `${(custom.durationMs / 1000).toFixed(1)}s · ${custom.keystrokes} keystrokes`
+        : `${sequenceCount} typing sequences · one at random per run`;
+
   return (
     <>
       <div
         className={[
-          'border-[1.5px] border-dashed border-panel-border rounded-[14px] p-4.5 flex items-center gap-3.5 cursor-pointer transition-[border-color,background] duration-150 bg-panel-alt hover:border-accent',
+          'border-[1.5px] rounded-[14px] p-4.5 flex items-center gap-3.5 cursor-pointer transition-[border-color,background] duration-150 bg-panel-alt hover:border-accent',
           disabled && 'opacity-40 cursor-not-allowed pointer-events-none',
-          dragover && 'border-accent',
-          sound && 'border-solid',
+          dragover ? 'border-accent border-dashed' : 'border-panel-border',
+          choice === 'off' ? 'border-dashed opacity-60' : 'border-solid',
         ]
           .filter(Boolean)
           .join(' ')}
@@ -188,31 +214,45 @@ function SoundDrop({ name, sound, disabled, onChoose, onRemove }) {
             strokeWidth={1.8}
             strokeLinecap="round"
           >
-            <path d="M3 12v2M7 8v10M11 5v14M15 9v7M19 11v3" />
+            {choice === 'off' ? (
+              <path d="M11 5L6 9H3v6h3l5 4zM17 9l4 6M21 9l-4 6" />
+            ) : (
+              <path d="M3 12v2M7 8v10M11 5v14M15 9v7M19 11v3" />
+            )}
           </svg>
         </div>
         <div className="flex-1 min-w-0">
-          <div className="text-[14px] mb-0.5 truncate">
-            {sound ? name || 'Typing sound' : 'Click or drop a typing sound'}
-          </div>
-          <div className="text-[12px] text-text-dim font-mono truncate">
-            {sound ? `${(sound.durationMs / 1000).toFixed(1)}s of audio` : 'Any audio file'}
-          </div>
+          <div className="text-[14px] mb-0.5 truncate">{title}</div>
+          <div className="text-[12px] text-text-dim font-mono truncate">{detail}</div>
         </div>
       </div>
 
-      {sound && (
-        <div className="flex gap-1.5 mt-2">
+      <div className="flex gap-1.5 mt-2">
+        {choice !== 'builtin' && (
+          <button type="button" className={MINI_BTN} onClick={() => onChoice('builtin')}>
+            Built-in
+          </button>
+        )}
+        {custom && choice !== 'custom' && (
+          <button type="button" className={MINI_BTN} onClick={() => onChoice('custom')}>
+            My clip
+          </button>
+        )}
+        {choice !== 'off' && (
+          <button type="button" className={MINI_BTN} onClick={() => onChoice('off')}>
+            No sound
+          </button>
+        )}
+        {custom && (
           <button
             type="button"
             className={`${MINI_BTN} hover:border-error hover:text-error`}
-            onClick={onRemove}
-            disabled={disabled}
+            onClick={onForget}
           >
-            Remove the sound
+            Forget my clip
           </button>
-        </div>
-      )}
+        )}
+      </div>
 
       <input
         ref={inputRef}
@@ -332,7 +372,10 @@ export default function ChatBoxStudio() {
   const [progress, setProgress] = useState({ stage: '', done: 0, total: 0 });
   const [hint, setHint] = useState({ text: '', isError: false });
   const [preview, setPreview] = useState(null); // the frame's state while playing
-  const [sound, setSound] = useState(null); // { samples, sampleRate, durationMs }
+  // Decoded typing clips: the ones that ship with the studio, and one of your
+  // own if you have added it.
+  const [builtinClips, setBuiltinClips] = useState([]);
+  const [customClip, setCustomClip] = useState(null);
   const [stage, setStage] = useState({ width: 0, height: 0 });
   const [boxHeight, setBoxHeight] = useState(0);
   const [boxEl, setBoxEl] = useState(null);
@@ -361,6 +404,15 @@ export default function ChatBoxStudio() {
     setSettings((prev) => ({ ...prev, [key]: value }));
     saveKey(key, value);
   }
+
+  const soundChoice = normalizeChoice(settings.soundChoice);
+  // What the recording will be laid over: the built-in sequences, one clip of
+  // your own, or nothing at all.
+  const clips = useMemo(() => {
+    if (soundChoice === 'off') return [];
+    if (soundChoice === 'custom') return customClip ? [customClip] : [];
+    return builtinClips;
+  }, [builtinClips, customClip, soundChoice]);
 
   const width = parseSize(settings.width, 1080);
   const height = parseSize(settings.height, 1920);
@@ -438,15 +490,17 @@ export default function ChatBoxStudio() {
 
   if (!preview) fullBoxHeight.current = boxHeight;
 
-  // The typing sound the last visit left behind, decoded once to the rate the
-  // encoder wants. A clip that will no longer decode is dropped quietly — it is
-  // the one thing here that is a file rather than a setting.
+  // The sounds, decoded once to the rate the encoder wants: the sequences that
+  // ship with the studio, and the clip the last visit left behind. Anything
+  // that will no longer decode is dropped quietly — they are the one thing here
+  // that is a file rather than a setting.
   useEffect(() => {
     let live = true;
+    loadSequences(AUDIO_SAMPLE_RATE).then((clips) => live && setBuiltinClips(clips));
     loadSound().then(async (blob) => {
       if (!live || !blob) return;
-      const decoded = await decodeMono(await blob.arrayBuffer(), AUDIO_SAMPLE_RATE);
-      if (live && decoded) setSound(decoded);
+      const decoded = await decodeClip(await blob.arrayBuffer(), AUDIO_SAMPLE_RATE);
+      if (live && decoded) setCustomClip(decoded);
     });
     return () => {
       live = false;
@@ -485,7 +539,7 @@ export default function ChatBoxStudio() {
     previewAudioRef.current?.close();
     previewAudioRef.current = null;
 
-    const track = sound ? typingTrack(sound, plan, plan.totalMs) : null;
+    const track = clips.length ? typingTrack(clips, plan, plan.totalMs) : null;
     if (track) {
       try {
         const Ctx = window.AudioContext || window.webkitAudioContext;
@@ -515,7 +569,7 @@ export default function ChatBoxStudio() {
       previewRef.current = requestAnimationFrame(step);
     };
     previewRef.current = requestAnimationFrame(step);
-  }, [plan, sound]);
+  }, [clips, plan]);
 
   function stopPreview() {
     cancelAnimationFrame(previewRef.current);
@@ -524,24 +578,26 @@ export default function ChatBoxStudio() {
     setPreview(null);
   }
 
-  // Take a typing clip: decode it for the recorder and the preview, and keep
-  // the file itself so it is still here next time.
+  // Take a typing clip of your own: decode it for the recorder and the preview,
+  // and keep the file itself so it is still here next time.
   async function chooseSound(file) {
     if (!file) return;
-    const decoded = await decodeMono(await file.arrayBuffer(), AUDIO_SAMPLE_RATE);
+    const decoded = await decodeClip(await file.arrayBuffer(), AUDIO_SAMPLE_RATE, file.name);
     if (!decoded) {
       setHint({ text: `${file.name} could not be decoded as audio.`, isError: true });
       return;
     }
-    setSound(decoded);
+    setCustomClip(decoded);
     set('soundName', file.name);
+    set('soundChoice', 'custom');
     setHint({ text: '', isError: false });
     saveSound(file);
   }
 
-  function removeSound() {
-    setSound(null);
+  function forgetSound() {
+    setCustomClip(null);
     set('soundName', '');
+    set('soundChoice', 'builtin');
     clearSound();
   }
 
@@ -608,7 +664,7 @@ export default function ChatBoxStudio() {
         placeholder: settings.placeholder,
         modelChip: settings.modelChip,
         attachments,
-        sound,
+        clips,
         plan,
         onProgress: setProgress,
         shouldStop: () => cancelRef.current,
@@ -634,7 +690,7 @@ export default function ChatBoxStudio() {
             `Recorded ${plan.frameCount} frames — play it below, then download.`,
             result.audio?.dropped && 'This browser could not encode the sound, so it is silent.',
             result.audio?.wrapped &&
-              'The typing outlasts your clip, so the sound starts over once in it.',
+              'The typing is longer than every sequence put together, so some are heard twice.',
           ]
             .filter(Boolean)
             .join(' '),
@@ -655,11 +711,6 @@ export default function ChatBoxStudio() {
   const presetValue = `${width}x${height}`;
   // While the preview plays, the box holds what has landed so far.
   const shownAttachments = preview ? attachments.slice(0, preview.attachCount) : attachments;
-  // How much of the clip the typing will actually use, against how much there
-  // is — a two-second clip under a ten-second message has to start over.
-  const soundNeededMs = sound ? neededMs(typingRuns(plan)) : 0;
-  const soundShort = sound ? soundNeededMs > sound.durationMs : false;
-
   return (
     <div className="min-h-screen flex flex-col lg:flex-row">
       {/* The stage: the video's frame, at the video's shape, with the real box
@@ -976,26 +1027,22 @@ export default function ChatBoxStudio() {
 
         <Panel title="Typing sound">
           <SoundDrop
-            name={settings.soundName}
-            sound={sound}
+            choice={soundChoice}
+            sequenceCount={builtinClips.length || SEQUENCE_COUNT}
+            custom={customClip}
+            customName={settings.soundName}
             disabled={recording}
             onChoose={chooseSound}
-            onRemove={removeSound}
+            onChoice={(next) => set('soundChoice', next)}
+            onForget={forgetSound}
           />
-          {sound && (
-            <div className={`${FIELD_HELP} mt-2`}>
-              Heard only while characters are landing — silent before the typing, while the images
-              drop in, at a full stop, and from the send onwards. It plays through your clip rather
-              than repeating the same moment: this message uses {(soundNeededMs / 1000).toFixed(1)}s
-              of the {(sound.durationMs / 1000).toFixed(1)}s you gave it.
-            </div>
-          )}
-          {soundShort && (
-            <div className="font-mono text-[11.5px] text-warning mt-2 leading-[1.4]">
-              The typing needs more than the clip has, so it starts over once. A longer clip fixes
-              it.
-            </div>
-          )}
+          <div className={`${FIELD_HELP} mt-2.5`}>
+            {soundChoice === 'off'
+              ? 'The recording will have no sound at all.'
+              : soundChoice === 'custom'
+                ? 'Your clip is played from its own first keystroke, under each burst of typing, and stops with it.'
+                : 'One sequence is picked at random for each burst of typing, played from its first keystroke and cut when the typing stops — so the sound starts and ends with the characters, and no two recordings sound alike.'}
+          </div>
         </Panel>
 
         <Panel title="Recording">
@@ -1021,7 +1068,7 @@ export default function ChatBoxStudio() {
             cacheKey={item ? gen.outputKey(item) : ''}
             progress={progress}
             recording={recording}
-            hasSound={!!sound}
+            hasSound={clips.length > 0}
           />
 
           {hint.text && (

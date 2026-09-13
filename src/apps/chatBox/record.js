@@ -80,7 +80,9 @@ export async function recordChatBox({
   placeholder,
   modelChip,
   attachments = [],
-  sound = null, // { samples, sampleRate } at AUDIO_SAMPLE_RATE, or null
+  // Decoded typing clips at AUDIO_SAMPLE_RATE (sequences.js), or none for a
+  // silent recording. One is picked at random per burst of typing.
+  clips = [],
   plan,
   onProgress = () => {},
   shouldStop = () => false,
@@ -108,9 +110,9 @@ export async function recordChatBox({
     finalText: plan.chars.join(''),
   });
 
-  // The sound is cut to the plan before anything is encoded, so a clip that is
-  // too short to cover the typing is known about up front.
-  const track = sound ? typingTrack(sound, plan, plan.totalMs) : null;
+  // The sound is arranged before anything is encoded, so a browser that cannot
+  // encode audio is known about before the first frame.
+  const track = clips.length ? typingTrack(clips, plan, plan.totalMs) : null;
 
   const bitrate = motionBitrate(width, height, plan.fps);
   const { encoding, audio } = await pickTracks(width, height, plan.fps, bitrate, !!track);
@@ -192,6 +194,8 @@ export async function recordChatBox({
     durationMs: plan.totalMs,
     // What happened to the sound, for the studio to say so: missing when there
     // was none, `dropped` when this browser could not encode it at all.
-    audio: track ? { played: !!audio, wrapped: track.wrapped, dropped: !audio } : null,
+    audio: track
+      ? { played: !!audio, wrapped: track.wrapped, dropped: !audio, sequences: track.segments }
+      : null,
   };
 }

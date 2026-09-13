@@ -55,11 +55,13 @@ import {
   recordingBasename,
 } from '../src/apps/chatBox/scene.js';
 import {
-  KEY_TAIL_MS,
   MERGE_GAP_MS,
-  neededMs,
+  RUN_TAIL_MS,
+  arrangeClips,
+  clipTiming,
+  findOnsets,
   renderTrack,
-  trackSegments,
+  rmsEnvelope,
   typingRuns,
 } from '../src/apps/chatBox/audio.js';
 
@@ -1133,7 +1135,8 @@ describe('the images a recording drops in', () => {
   });
 });
 
-// The typing sound: where it is heard, and which part of the clip is used.
+// The typing sound: where it is heard, which clip plays there, and what the
+// track it renders to looks like.
 describe('the typing sound', () => {
   const plan = planRecording({
     text: 'hello there',
@@ -1142,6 +1145,16 @@ describe('the typing sound', () => {
     startDelayMs: 1000,
     pauseBeforeSendMs: 800,
     waitAfterSendMs: 2000,
+  });
+  // Two clips, as decodeClip would hand them over: half a second of room tone
+  // before the first keystroke in one of them.
+  const clip = (durationMs, leadMs) => ({
+    samples: new Float32Array(Math.round((durationMs / 1000) * 1000)).fill(1),
+    sampleRate: 1000,
+    durationMs,
+    leadMs,
+    usableMs: durationMs - leadMs,
+    keystrokes: 8,
   });
 
   it('is heard only while characters are landing', () => {
@@ -1175,58 +1188,84 @@ describe('the typing sound', () => {
 
   it('breaks the run at a pause longer than the tail', () => {
     const slow = planRecording({ text: 'ab', cps: 2, seed: 1, startDelayMs: 0 });
-    expect(typingRuns(slow).length).toBe(2);
-    expect(typingRuns(slow)[0].endMs - typingRuns(slow)[0].startMs).toBeCloseTo(KEY_TAIL_MS, 5);
+    const runs = typingRuns(slow);
+    expect(runs.length).toBe(2);
+    expect(runs[0].endMs - runs[0].startMs).toBeCloseTo(RUN_TAIL_MS, 5);
   });
 
-  it('never plays the same part of the clip twice', () => {
-    const runs = [
-      { startMs: 0, endMs: 200 },
-      { startMs: 500, endMs: 700 },
-      { startMs: 900, endMs: 1000 },
-    ];
-    const { segments, wrapped } = trackSegments(runs, 10000);
+  it('stops a beat after the last character rather than ringing on', () => {
+    const runs = typingRuns(plan);
+    const lastKeystroke = plan.typingStartMs + plan.times[plan.times.length - 1];
+    expect(runs[runs.length - 1].endMs - lastKeystroke).toBeLessThanOrEqual(RUN_TAIL_MS);
+  });
+
+  it('plays every clip from its own first keystroke, never its silence', () => {
+    const clips = [clip(800, 500), clip(800, 0)];
+    const { segments } = arrangeClips([{ startMs: 0, endMs: 600 }], clips, () => 0);
+    expect(segments[0].offsetMs).toBe(clips[segments[0].clip].leadMs);
+  });
+
+  it('fills a long run with more clips, and cuts the last one when it ends', () => {
+    const clips = [clip(400, 0), clip(400, 0), clip(400, 0)];
+    const { segments } = arrangeClips([{ startMs: 100, endMs: 1000 }], clips, () => 0);
+    expect(segments.length).toBe(3);
+    expect(segments[0].atMs).toBe(100);
+    expect(segments[1].atMs).toBe(500);
+    expect(segments[2].durationMs).toBe(100); // cut at the end of the run
+    const last = segments[segments.length - 1];
+    expect(last.atMs + last.durationMs).toBe(1000);
+  });
+
+  it('picks a different clip each time before repeating any', () => {
+    const clips = [clip(300, 0), clip(300, 0), clip(300, 0)];
+    const { segments, wrapped } = arrangeClips([{ startMs: 0, endMs: 900 }], clips, () => 0);
+    expect(new Set(segments.map((s) => s.clip)).size).toBe(3);
     expect(wrapped).toBe(false);
-    expect(segments.map((s) => s.offsetMs)).toEqual([0, 200, 400]);
-    expect(segments.map((s) => s.atMs)).toEqual([0, 500, 900]);
   });
 
-  it('starts the clip over when the typing outlasts it, and says so', () => {
-    const runs = [
-      { startMs: 0, endMs: 200 },
-      { startMs: 500, endMs: 700 },
-    ];
-    const { segments, wrapped } = trackSegments(runs, 300);
+  it('says so when the typing outlasts every clip it has', () => {
+    const clips = [clip(300, 0)];
+    const { wrapped } = arrangeClips([{ startMs: 0, endMs: 900 }], clips, () => 0);
     expect(wrapped).toBe(true);
-    expect(segments.map((s) => s.offsetMs)).toEqual([0, 0]);
   });
 
-  it('adds up what the recording asks of the clip', () => {
-    expect(
-      neededMs([
-        { startMs: 0, endMs: 200 },
-        { startMs: 500, endMs: 700 },
-      ])
-    ).toBe(400);
-  });
-
-  it('lays the segments into silence, and fades their edges', () => {
-    const source = { samples: new Float32Array(4800).fill(1), sampleRate: 48000 };
-    const track = renderTrack(source, [{ atMs: 50, offsetMs: 0, durationMs: 50 }], 200);
-    expect(track.length).toBe(Math.ceil(0.2 * 48000));
+  it('lays the clips into silence, and fades their edges', () => {
+    const clips = [{ samples: new Float32Array(1000).fill(1), sampleRate: 1000 }];
+    const track = renderTrack(
+      clips,
+      [{ atMs: 50, clip: 0, offsetMs: 0, durationMs: 50 }],
+      200,
+      1000
+    );
+    expect(track.length).toBe(200);
     expect(track[0]).toBe(0); // before the segment
-    expect(track[track.length - 1]).toBe(0); // after it
-    const middle = Math.round(0.075 * 48000);
-    expect(track[middle]).toBeCloseTo(1, 5);
-    expect(track[Math.round(0.05 * 48000)]).toBeLessThan(1); // faded in
+    expect(track[199]).toBe(0); // after it
+    expect(track[75]).toBeCloseTo(1, 5); // the middle of it, at full level
+    expect(track[50]).toBeLessThan(1); // faded in
   });
 
-  it('leaves nothing but silence when there is nothing to type', () => {
+  it('finds the keystrokes in a clip, and where its typing starts', () => {
+    // Half a second of near-silence, then three clicks 200ms apart.
+    const rate = 1000;
+    const samples = new Float32Array(1500).fill(0.001);
+    [500, 700, 900].forEach((at) => {
+      for (let i = 0; i < 20; i++) samples[at + i] = 0.8;
+    });
+    const onsets = findOnsets(rmsEnvelope(samples, rate));
+    expect(onsets).toEqual([500, 700, 900]);
+    const timing = clipTiming(samples, rate);
+    expect(timing.leadMs).toBeLessThan(500);
+    expect(timing.leadMs).toBeGreaterThan(480);
+    expect(timing.keystrokes).toBe(3);
+    expect(timing.usableMs).toBeCloseTo(1500 - timing.leadMs, 5);
+  });
+
+  it('has nothing to play when there is nothing to type', () => {
     expect(typingRuns(planRecording({ text: '' }))).toEqual([]);
+    expect(arrangeClips([], [clip(300, 0)]).segments).toEqual([]);
   });
 
-  it('has a tail long enough to carry a keystroke, and a merge gap under it', () => {
-    expect(KEY_TAIL_MS).toBeGreaterThan(50);
-    expect(MERGE_GAP_MS).toBeLessThan(KEY_TAIL_MS);
+  it('merges keystrokes closer together than the gap it allows', () => {
+    expect(MERGE_GAP_MS).toBeLessThan(RUN_TAIL_MS);
   });
 });

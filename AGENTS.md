@@ -26,9 +26,8 @@ that also proxies the Replicate API.
   Replicate. It records the chat box (`src/apps/chatBox/ChatBox.jsx`, the styled
   box this route used to be a mockup of) having images dropped into it and a
   message typed and sent, as a video file at whatever resolution a reel wants —
-  every frame painted on a canvas and encoded in the browser, with the typing
-  sound (if one was given) cut to the same timeline. Still not in the tools
-  sidebar.
+  every frame painted on a canvas and encoded in the browser, over the sound of
+  a real keyboard cut to the same timeline. Still not in the tools sidebar.
 
 ## Rules that matter here
 
@@ -100,8 +99,9 @@ HTML.
   (`frames.js` — end-frame extraction via off-screen `<video>` + canvas) and
   `src/apps/chatBox/` (`ChatBox.jsx` — the box itself, `design.js` — the numbers
   it is built from, `scene.js` — the same box painted on a canvas, `timeline.js`
-  — what it is doing at a given millisecond, `audio.js` — the typing sound cut
-  to that, `record.js` — the frames and the sound encoded into a file,
+  — what it is doing at a given millisecond, `audio.js` — the typing sound
+  arranged against that, `typing/` + `sequences.js` — the keyboard clips that
+  ship with it, `record.js` — the frames and the sound encoded into a file,
   `sound.js` + `storage.js` — what is kept between visits).
 - `src/shared/` — what the tools are built from: `theme.css` (the Tailwind
   entry — `@theme` tokens, base styles, keyframes), `components/` (import from
@@ -289,16 +289,31 @@ Details worth knowing:
 
 ### The typing sound
 
-`audio.js` decides where a keyboard clip is heard, and it is the answer to three
-things at once. `typingRuns` is the stretches where characters are actually
-landing — merged when they run together, so continuous typing sounds continuous
-rather than gated per key, and cut at the send. `trackSegments` walks a cursor
-_forward_ through the clip, so no part of it is ever played twice; only a clip
-shorter than the typing wraps, and `wrapped` says so (the studio warns before
-recording, and the hint repeats it after). `renderTrack` lays those segments
-into silence with a short fade at each edge, because the clip is cut at
-arbitrary points and a hard edge is a click. All three are pure and unit-tested;
-only `decodeMono` needs a browser.
+`typing/` holds eight short mp3s, one per burst of typing, cut out of a single
+recording of a real keyboard. They are what the sound is made of: wherever
+characters are landing, `audio.js` drops one of them at random under the run,
+and wherever they are not there is nothing. That arrangement is what makes the
+sound do the three things it has to, rather than any gating:
+
+- **Only while typing**, because a clip exists only under a run of keystrokes —
+  the opening beat, the images dropping in, a breath at a full stop, the pause
+  before the send and the wait after it are silent.
+- **In time with the picture**, because every clip is played from its own first
+  keystroke (`leadMs`, found by the onset detector when it is decoded), never
+  from the top of the file. That matters: the source recording opens with 450ms
+  of room tone, which a clock-based cut would have laid under the first
+  characters — and did, until it was measured. The far end is cut the same way,
+  `RUN_TAIL_MS` after the last character, so the sound stops with the typing
+  instead of ringing into the pause.
+- **Never the same part twice**, because clips are picked without replacement
+  until they run out (`wrapped` says when a long message has gone through them
+  all).
+
+Splitting a new source clip is the same job each time: find the onsets, group
+them into bursts, and cut the mp3 on frame boundaries so nothing is re-encoded —
+the sequences in `typing/` were cut that way from one 8-second recording, and
+another file dropped into that folder joins the set without a code change
+(`sequences.js` globs it).
 
 The sound then costs the recorder a second track: `pickTracks` prefers whatever
 video encoding is best, but a browser with H.264 and no AAC would otherwise
@@ -354,9 +369,10 @@ arithmetic (an even resolution, the presets, the download's name and extension),
 the images it drops in (when each lands, what that does to the typing, the send
 and the length, and how far the newest one is into landing) and its typing sound
 (that it is heard only while characters land and silent either side, that a
-burst is one run and a pause breaks it, that the cursor never replays a part of
-the clip, that a short clip wraps and says so, and that the track is silence
-with faded edges).
+burst is one run and a pause breaks it, that a clip is played from its own first
+keystroke and cut when the run ends, that a long run is filled with more clips
+and no clip repeats until they have all been used, that the onset detector finds
+the keystrokes in a clip, and that the track is silence with faded edges).
 
 `useGenerationRun` has no unit coverage — it is a hook over `localStorage`,
 `document.title` and `beforeunload`, and the node test environment has none of
