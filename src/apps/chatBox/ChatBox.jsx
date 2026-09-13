@@ -1,16 +1,20 @@
-import { useEffect, useRef, useState } from 'react';
-import { IconButton, Spinner } from '../../shared/components';
-import { DEFAULT_MODEL_CHIP, DEFAULT_PLACEHOLDER, ICONS } from './design.js';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { Spinner } from '../../shared/components';
+import { DEFAULT_MODEL_CHIP, DEFAULT_PLACEHOLDER, ICONS, METRICS } from './design.js';
 
 // The chat box itself: the thing the studio records.
 //
-// Every size in the markup below is a METRICS value written out as a Tailwind
-// arbitrary value (26px radius, 19px text, 34px controls, 56px thumbnails…) —
-// the box's own width comes from whoever renders it, since that is the layout
-// width the studio is set to. They are spelled out rather than interpolated because Tailwind
-// needs to see the class strings, so a change in design.js means a change here
-// too — and scene.js, which paints the same box on a canvas, reads those
-// numbers directly.
+// **Every size in it comes from METRICS (design.js), as an inline style.** Not
+// because inline styles are nice — the rest of this app is Tailwind utilities
+// and stays that way for colours, layout and states — but because this box is
+// drawn twice: here, and again on a canvas by scene.js for the video. A padding
+// written out as `pl-[22px]` here and as `METRICS.padLeft` there is two numbers
+// that have to be changed together, and the day one of them isn't, the
+// recording quietly stops matching the box on screen. It happened. So the
+// numbers live in design.js and both renderers read them, and a test keeps
+// hardcoded pixel values out of this file.
+//
+// To restyle the box: change design.js. The box and the video both follow.
 //
 // Images are attached by dropping them on the box, by the paperclip, or by
 // pasting: each one becomes a rounded square in a strip above the text, the way
@@ -25,7 +29,7 @@ const stroke = {
   strokeLinejoin: 'round',
 };
 
-const Icon = ({ d, size = 16, width = 2 }) => (
+const Icon = ({ d, size = METRICS.iconSize, width = 2 }) => (
   <svg width={size} height={size} viewBox="0 0 24 24" {...stroke} strokeWidth={width}>
     <path d={d} />
   </svg>
@@ -50,6 +54,41 @@ export async function readImageFiles(fileList) {
   return (await Promise.all(files.map(readFile))).filter(Boolean);
 }
 
+// METRICS, arranged as the style objects the markup needs.
+const styles = (m) => ({
+  headline: { fontSize: m.headlineFontSize, marginBottom: m.headlineGap },
+  box: {
+    borderRadius: m.radius,
+    paddingTop: m.padTop,
+    paddingRight: m.padRight,
+    paddingBottom: m.padBottom,
+    paddingLeft: m.padLeft,
+    gap: m.gap,
+  },
+  strip: { gap: m.thumbGap },
+  thumb: { width: m.thumb, height: m.thumb, borderRadius: m.thumbRadius },
+  text: {
+    fontSize: m.fontSize,
+    lineHeight: `${m.lineHeight}px`,
+    minHeight: m.minTextHeight,
+    maxHeight: m.maxTextLines * m.lineHeight,
+  },
+  controls: { gap: m.chipGap },
+  pill: { height: m.control, borderRadius: m.pillRadius, gap: m.pillGap },
+  pillIdle: { width: m.control },
+  pillActive: { paddingLeft: m.pillPadLeft, paddingRight: m.pillPadRight },
+  chip: {
+    height: m.control,
+    borderRadius: m.chipRadius,
+    paddingLeft: m.chipPadX,
+    paddingRight: m.chipPadX,
+    fontSize: m.chipFontSize,
+    gap: m.pillGap,
+  },
+  send: { width: m.control, height: m.control },
+  overlay: { borderRadius: m.radius, fontSize: m.chipFontSize },
+});
+
 export function ChatBox({
   text,
   onTextChange,
@@ -69,6 +108,7 @@ export function ChatBox({
   // dragenter/dragleave fire for every child the pointer crosses; counting them
   // is what keeps the highlight from flickering on the way in.
   const dragDepth = useRef(0);
+  const s = useMemo(() => styles(METRICS), []);
 
   // Grow with the text, up to the height the composer scrolls at.
   useEffect(() => {
@@ -93,12 +133,16 @@ export function ChatBox({
     setDragging(false);
   }
 
-  const canSend = text.trim().length > 0 || attachments.length > 0;
+  const attached = attachments.length > 0;
+  const canSend = text.trim().length > 0 || attached;
 
   return (
     <div className="w-full flex flex-col items-center">
       {headline && (
-        <h1 className="text-[46px] font-normal text-white text-center tracking-[-0.01em] m-0 mb-[32px]">
+        <h1
+          className="font-normal text-white text-center tracking-[-0.01em] m-0"
+          style={s.headline}
+        >
           {headline}
         </h1>
       )}
@@ -106,9 +150,10 @@ export function ChatBox({
       <div
         ref={boxRef}
         data-testid="chat-box"
+        style={s.box}
         className={[
-          'relative w-full bg-panel border rounded-[26px] pt-[18px] pr-[14px] pb-[14px] pl-[18px]',
-          'flex flex-col gap-[14px] shadow-[0_8px_40px_rgba(0,0,0,0.45)]',
+          'relative w-full bg-panel border flex flex-col',
+          'shadow-[0_8px_40px_rgba(0,0,0,0.45)]',
           'transition-[border-color,background-color] duration-150',
           dragging ? 'border-accent bg-accent-dim' : 'border-panel-border',
         ].join(' ')}
@@ -136,15 +181,16 @@ export function ChatBox({
           }
         }}
       >
-        {attachments.length > 0 && (
-          <div className="flex flex-wrap gap-[8px]">
+        {attached && (
+          <div className="flex flex-wrap" style={s.strip}>
             {attachments.map((a) => (
               <div key={a.id} className="relative group">
                 <img
                   src={a.dataUri}
                   alt=""
                   title={a.name}
-                  className="w-[116px] h-[116px] rounded-[16px] object-cover block bg-black border border-[#3a3a3a]"
+                  style={s.thumb}
+                  className="object-cover block bg-black border border-[#3a3a3a]"
                 />
                 {!readOnly && (
                   <button
@@ -167,7 +213,8 @@ export function ChatBox({
           rows={1}
           readOnly={readOnly}
           placeholder={placeholder}
-          className="w-full bg-transparent border-none outline-none resize-none text-text font-sans text-[19px] font-normal leading-[27px] min-h-[30px] max-h-[189px] p-0 placeholder:text-text-dim"
+          style={s.text}
+          className="w-full bg-transparent border-none outline-none resize-none text-text font-sans font-normal p-0 placeholder:text-text-dim"
           onChange={(e) => onTextChange?.(e.target.value)}
           onKeyDown={(e) => {
             if (e.key === 'Enter' && !e.shiftKey) {
@@ -178,49 +225,72 @@ export function ChatBox({
         />
 
         <div className="flex items-center justify-between">
-          <div className="flex items-center gap-[8px]">
-            <IconButton
-              variant="pill"
+          <div className="flex items-center" style={s.controls}>
+            {/* The attach pill: a circle with a paperclip, or a wider pill with
+                a count once something is attached. */}
+            <button
+              type="button"
               title="Attach an image"
-              active={attachments.length > 0}
               onClick={() => !readOnly && fileRef.current?.click()}
+              style={{ ...s.pill, ...(attached ? s.pillActive : s.pillIdle) }}
+              className={[
+                'flex items-center justify-center cursor-pointer font-mono border shrink-0',
+                'transition-[border-color,color,background] duration-150 [&>svg]:shrink-0',
+                attached
+                  ? 'border-accent bg-accent-dim text-accent'
+                  : 'border-panel-border bg-transparent text-text-dim hover:border-[#4a4a4a] hover:text-text',
+              ].join(' ')}
             >
-              {attachments.length > 0 ? (
+              {attached ? (
                 <>
                   <Icon d={ICONS.image} />
-                  <span>{attachments.length}</span>
+                  <span style={{ fontSize: METRICS.chipFontSize }}>{attachments.length}</span>
                 </>
               ) : (
                 <Icon d={ICONS.clip} />
               )}
-            </IconButton>
-
-            <button
-              type="button"
-              className="font-mono text-[13px] text-text-dim border border-panel-border rounded-[16px] px-[12px] py-1.5 bg-transparent flex items-center gap-1.5 cursor-pointer"
-            >
-              {modelChip}
-              <Icon d={ICONS.chevron} size={10} />
             </button>
+
+            {modelChip && (
+              <button
+                type="button"
+                style={s.chip}
+                className="font-mono text-text-dim border border-panel-border bg-transparent flex items-center cursor-pointer shrink-0"
+              >
+                {modelChip}
+                <Icon d={ICONS.chevron} size={10} width={2.4} />
+              </button>
+            )}
           </div>
 
-          <IconButton
-            variant="round"
+          <button
+            type="button"
             title="Send"
             disabled={!canSend}
             onClick={() => canSend && onSubmit?.()}
+            style={s.send}
+            className={[
+              'flex items-center justify-center rounded-full shrink-0',
+              'transition-[transform,opacity,background] duration-150',
+              canSend
+                ? 'bg-accent text-black cursor-pointer hover:scale-105'
+                : 'bg-[#3a3a3a] text-[#6a6a6a] cursor-default',
+            ].join(' ')}
           >
             {sending ? (
-              <Spinner size={16} variant="dark" />
+              <Spinner size={METRICS.sendIconSize} variant="dark" />
             ) : (
-              <Icon d={ICONS.arrowUp} width={2.5} />
+              <Icon d={ICONS.arrowUp} size={METRICS.sendIconSize} width={2.5} />
             )}
-          </IconButton>
+          </button>
         </div>
 
         {dragging && (
-          <div className="absolute inset-0 rounded-[26px] border-[1.5px] border-dashed border-accent bg-black/45 flex items-center justify-center pointer-events-none">
-            <span className="font-mono text-[13px] text-accent">Drop to attach</span>
+          <div
+            style={s.overlay}
+            className="absolute inset-0 border-[1.5px] border-dashed border-accent bg-black/45 flex items-center justify-center pointer-events-none font-mono text-accent"
+          >
+            Drop to attach
           </div>
         )}
       </div>

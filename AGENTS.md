@@ -260,12 +260,18 @@ like at a given millisecond. So the recording is laid out at 1080 wide rather
 than scaled up from a screenshot, it renders as fast as the encoder goes
 rather than in real time, and it needs no visible window.
 
-That split is the thing to keep honest: `ChatBox.jsx` writes the metrics out as
-Tailwind arbitrary values (Tailwind has to see the class strings) while
-`scene.js` multiplies the same numbers by a scale, so a size changed in
-`design.js` has to be changed in the markup too. The studio's stage is the check
-— it is the real component in a frame the shape of the video, at the scale the
-recording uses, so the two are side by side the whole time.
+**Restyling the box means editing `design.js`, and only `design.js`.** Both
+renderers read METRICS from it: `scene.js` multiplies each number by the scale,
+and `ChatBox.jsx` applies them as inline styles. That is the one place in this
+repo where a component does not size itself with Tailwind utilities, and it is
+deliberate — a padding written as `pl-[22px]` in the markup and as
+`METRICS.padLeft` in the painter is two numbers that have to be changed
+together, and the first time one of them wasn't, a restyled box went on
+recording the old one. Colours, layout and states are still Tailwind. A test
+(`the chat box and its painter`) fails if a pixel size finds its way back into
+the markup, and the studio's stage is the eyeball check — it is the real
+component in a frame the shape of the video, at the scale the recording uses,
+so the two are side by side the whole time.
 
 A recording is five stretches of time, all of them in `timeline.js`: an empty
 box, the images landing in it one every `attachIntervalMs`, the message typed,
@@ -373,8 +379,11 @@ at a full stop, that the same settings produce the same recording, that a
 character is never un-typed and the caret goes away at the send, the frame count
 the encoder is asked for, and the clamping of every settings box), its frame
 arithmetic (an even resolution, the presets, the download's name and extension),
-the images it drops in (when each lands, what that does to the typing, the send
-and the length, and how far the newest one is into landing) and its typing sound
+that the box's markup carries no pixel
+sizes of its own and takes them from METRICS instead (so the painter cannot
+drift from the box), the images it drops in (when each lands, what that does to
+the typing, the send and the length, and how far the newest one is into
+landing) and its typing sound
 (that it is heard only while characters land and silent either side, that a
 burst is one run and a pause breaks it, that a clip is played from its own first
 keystroke and cut when the run ends, that a long run is filled with more clips

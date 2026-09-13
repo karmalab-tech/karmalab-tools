@@ -362,13 +362,7 @@ function attachButtonWidth(ctx, scene, attachCount) {
   if (!attachCount) return m.control;
   ctx.font = scene.fontChip;
   const count = String(attachCount);
-  return (
-    10 * scene.scale +
-    m.iconSize +
-    7 * scene.scale +
-    ctx.measureText(count).width +
-    14 * scene.scale
-  );
+  return m.pillPadLeft + m.iconSize + m.pillGap + ctx.measureText(count).width + m.pillPadRight;
 }
 
 function drawAttachButton(ctx, scene, x, y, attachCount) {
@@ -387,7 +381,7 @@ function drawAttachButton(ctx, scene, x, y, attachCount) {
   ctx.stroke();
 
   const color = active ? COLORS.accent : COLORS.dim;
-  const iconX = active ? x + 10 * scene.scale : x + (m.control - m.iconSize) / 2;
+  const iconX = active ? x + m.pillPadLeft : x + (m.control - m.iconSize) / 2;
   drawIcon(
     ctx,
     active ? ICONS.image : ICONS.clip,
@@ -403,7 +397,7 @@ function drawAttachButton(ctx, scene, x, y, attachCount) {
     ctx.fillStyle = color;
     ctx.textAlign = 'left';
     ctx.textBaseline = 'middle';
-    ctx.fillText(String(attachCount), iconX + m.iconSize + 7 * scene.scale, y + m.control / 2);
+    ctx.fillText(String(attachCount), iconX + m.iconSize + m.pillGap, y + m.control / 2);
   }
 }
 
@@ -412,8 +406,8 @@ function drawModelChip(ctx, scene, x, y) {
   if (!scene.modelChip) return;
   ctx.font = scene.fontChip;
   const labelW = ctx.measureText(scene.modelChip).width;
-  const chevron = 10 * scene.scale;
-  const w = m.chipPadX * 2 + labelW + 6 * scene.scale + chevron;
+  const chevron = m.chevronSize;
+  const w = m.chipPadX * 2 + labelW + m.pillGap + chevron;
 
   ctx.strokeStyle = COLORS.panelBorder;
   ctx.lineWidth = Math.max(1, scene.scale);
@@ -427,7 +421,7 @@ function drawModelChip(ctx, scene, x, y) {
   drawIcon(
     ctx,
     ICONS.chevron,
-    x + m.chipPadX + labelW + 6 * scene.scale,
+    x + m.chipPadX + labelW + m.pillGap,
     y + (m.control - chevron) / 2,
     chevron,
     COLORS.dim,

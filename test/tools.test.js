@@ -3,6 +3,7 @@
 // runs), how the Batch Video Studio's two modes flatten into one run list, and
 // how the Image Chain Studio finds the step a chain continues from.
 // None of it needs a DOM; `localStorage` is stubbed where it is touched.
+import { readFileSync } from 'node:fs';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { CHAIN_MODEL_KEYS, MODEL_CONFIGS, buildImageInput } from '../src/shared/imageModels.js';
@@ -57,7 +58,7 @@ import {
   recordingBasename,
   sceneScale,
 } from '../src/apps/chatBox/scene.js';
-import { DEFAULT_LAYOUT_WIDTH } from '../src/apps/chatBox/design.js';
+import { DEFAULT_LAYOUT_WIDTH, METRICS } from '../src/apps/chatBox/design.js';
 import {
   MERGE_GAP_MS,
   RUN_TAIL_MS,
@@ -1290,5 +1291,70 @@ describe('the typing sound', () => {
 
   it('merges keystrokes closer together than the gap it allows', () => {
     expect(MERGE_GAP_MS).toBeLessThan(RUN_TAIL_MS);
+  });
+});
+
+// The chat box is drawn twice — as DOM in ChatBox.jsx and on a canvas in
+// scene.js — and the video is only the box on screen for as long as the two
+// agree about its sizes. They agree by both reading METRICS, and this is what
+// stops a size being typed into the markup instead, which is how a restyled box
+// and an unchanged recording happened once already.
+describe('the chat box and its painter', () => {
+  const source = readFileSync(new URL('../src/apps/chatBox/ChatBox.jsx', import.meta.url), 'utf8');
+
+  it('has no pixel sizes written into the markup', () => {
+    // Comments are allowed to talk about sizes; the markup is not.
+    const code = source.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
+    // Tailwind arbitrary values in px — `pl-[22px]`, `text-[19px]`, `w-[56px]`.
+    const hardcoded = code.match(/\[\d+(\.\d+)?px\]/g) || [];
+    // The drop overlay's hairline border is the one exception: it is a border
+    // style rather than a metric the canvas has to match.
+    expect(hardcoded.filter((v) => v !== '[1.5px]')).toEqual([]);
+  });
+
+  it('takes its sizes from METRICS', () => {
+    expect(source).toContain("from './design.js'");
+    ['padLeft', 'padRight', 'radius', 'fontSize', 'thumb', 'control'].forEach((key) => {
+      expect(source).toContain(`m.${key}`);
+    });
+  });
+
+  it('has a metric for everything the painter draws', () => {
+    // A number the canvas multiplies by the scale has to exist here, or the
+    // painter would be scaling `undefined`.
+    [
+      'radius',
+      'padTop',
+      'padRight',
+      'padBottom',
+      'padLeft',
+      'gap',
+      'fontSize',
+      'lineHeight',
+      'minTextHeight',
+      'maxTextLines',
+      'caretWidth',
+      'thumb',
+      'thumbRadius',
+      'thumbGap',
+      'control',
+      'pillRadius',
+      'chipFontSize',
+      'chipRadius',
+      'chipPadX',
+      'chipGap',
+      'pillPadLeft',
+      'pillPadRight',
+      'pillGap',
+      'iconSize',
+      'sendIconSize',
+      'chevronSize',
+      'headlineFontSize',
+      'headlineGap',
+      'shadowBlur',
+      'shadowOffsetY',
+    ].forEach((key) => {
+      expect(Number.isFinite(METRICS[key])).toBe(true);
+    });
   });
 });

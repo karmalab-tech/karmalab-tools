@@ -52,12 +52,15 @@ export const FONT_SPECS = [
 export const DEFAULT_LAYOUT_WIDTH = 400;
 export const LAYOUT_WIDTH_LIMITS = [240, 1400];
 
+// Change a number here and it changes in both renderers — the box on screen
+// takes its sizes from this object too (ChatBox.jsx), so there is nowhere for
+// the two to drift apart.
 export const METRICS = {
   radius: 26,
   padTop: 18,
-  padRight: 18,
+  padRight: 14,
   padBottom: 14,
-  padLeft: 22,
+  padLeft: 18,
   // Between the attachment strip, the text and the controls row.
   gap: 14,
   fontSize: 19,
@@ -68,8 +71,8 @@ export const METRICS = {
   // the real composer scrolls.
   maxTextLines: 7,
   caretWidth: 2,
-  thumb: 56,
-  thumbRadius: 12,
+  thumb: 116,
+  thumbRadius: 16,
   thumbGap: 8,
   control: 34,
   pillRadius: 17,
@@ -77,8 +80,13 @@ export const METRICS = {
   chipRadius: 16,
   chipPadX: 12,
   chipGap: 8,
+  // The pill's own padding, which the canvas draws and the DOM pill wears.
+  pillPadLeft: 10,
+  pillPadRight: 14,
+  pillGap: 7,
   iconSize: 16,
   sendIconSize: 16,
+  chevronSize: 10,
   headlineFontSize: 46,
   headlineGap: 32,
   shadowBlur: 40,
