@@ -19,7 +19,15 @@
 // layout, the line wrapping) are exported separately and unit-tested, and the
 // picture is checked by looking at it.
 
-import { COLORS, FONT_MONO, FONT_SANS, FONT_SPECS, ICONS, METRICS } from './design.js';
+import {
+  COLORS,
+  DEFAULT_LAYOUT_WIDTH,
+  FONT_MONO,
+  FONT_SANS,
+  FONT_SPECS,
+  ICONS,
+  METRICS,
+} from './design.js';
 
 // The shapes a reel, a post or a YouTube still is cut to. Anything else is
 // typed in by hand.
@@ -33,7 +41,19 @@ export const RESOLUTION_PRESETS = [
 
 export const SIZE_LIMITS = [240, 2560];
 export const BOX_WIDTH_LIMITS = [40, 100];
-export const DEFAULT_BOX_WIDTH_PCT = 84;
+// Nearly the full width of the screen it is laid out on, the way a composer
+// sits on a phone.
+export const DEFAULT_BOX_WIDTH_PCT = 90;
+
+// How much every metric is multiplied by to fill the frame: a 1080-wide
+// recording of a 400-wide layout is drawn at 2.7×.
+export const sceneScale = (frameWidth, layoutWidth = DEFAULT_LAYOUT_WIDTH) =>
+  frameWidth / Math.max(1, layoutWidth);
+
+// The box's width in CSS pixels — what the DOM box on the studio's stage is
+// given — and in frame pixels, which is the same thing scaled.
+export const boxCssWidth = (layoutWidth, boxWidthPct) =>
+  Math.round((layoutWidth * boxWidthPct) / 100);
 
 // H.264 wants even dimensions, and a resolution box is free text. Returns a
 // usable even size inside the limits, or the fallback when it is not a number.
@@ -127,6 +147,7 @@ export function buildScene(ctx, options) {
   const {
     width,
     height,
+    layoutWidth = DEFAULT_LAYOUT_WIDTH,
     boxWidthPct = DEFAULT_BOX_WIDTH_PCT,
     background = COLORS.bg,
     headline = '',
@@ -136,9 +157,9 @@ export function buildScene(ctx, options) {
     finalText = '',
   } = options;
 
-  const scale = (width * boxWidthPct) / 100 / METRICS.boxWidth;
+  const scale = sceneScale(width, layoutWidth);
   const m = Object.fromEntries(Object.entries(METRICS).map(([k, v]) => [k, v * scale]));
-  const boxW = METRICS.boxWidth * scale;
+  const boxW = boxCssWidth(layoutWidth, boxWidthPct) * scale;
   const boxX = Math.round((width - boxW) / 2);
   const innerW = boxW - m.padLeft - m.padRight;
 

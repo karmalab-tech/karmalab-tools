@@ -257,7 +257,7 @@ The Chat Box Studio does not capture the screen. `src/apps/chatBox/scene.js`
 paints the box on a canvas at the target resolution, from the same numbers the
 DOM box is built from (`design.js`), and `timeline.js` says what it should look
 like at a given millisecond. So the recording is laid out at 1080 wide rather
-than scaled up from a 720px screenshot, it renders as fast as the encoder goes
+than scaled up from a screenshot, it renders as fast as the encoder goes
 rather than in real time, and it needs no visible window.
 
 That split is the thing to keep honest: `ChatBox.jsx` writes the metrics out as
@@ -275,6 +275,13 @@ of them.
 
 Details worth knowing:
 
+- **The layout width is what makes it a phone.** The box is laid out at
+  `layoutWidth` CSS pixels (400 by default — a phone) and every metric is then
+  multiplied by `frame width / layout width`, so a 1080-wide reel draws it at
+  2.7×: the text is as big in the frame as it is on a phone. Laying the same box
+  out at 860 and drawing it at 1.26× — which is what it did first — is a desktop
+  window shrunk into a reel, and reads as tiny on the thing it is watched on.
+  The box-width slider is a share of that screen, not of the frame.
 - **The composition is settled against the finished message**, and the box is
   drawn from its bottom edge up. The controls row and the send button hold still
   while the box grows over them, instead of the whole thing drifting up the

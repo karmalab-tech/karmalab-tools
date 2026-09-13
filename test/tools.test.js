@@ -48,12 +48,16 @@ import {
   stateAt,
 } from '../src/apps/chatBox/timeline.js';
 import {
+  DEFAULT_BOX_WIDTH_PCT,
   RESOLUTION_PRESETS,
   SIZE_LIMITS,
+  boxCssWidth,
   extensionForType,
   parseSize,
   recordingBasename,
+  sceneScale,
 } from '../src/apps/chatBox/scene.js';
+import { DEFAULT_LAYOUT_WIDTH } from '../src/apps/chatBox/design.js';
 import {
   MERGE_GAP_MS,
   RUN_TAIL_MS,
@@ -1076,6 +1080,25 @@ describe('the chat box recording frame', () => {
       expect(p.width % 2).toBe(0);
       expect(p.height % 2).toBe(0);
     });
+  });
+
+  it('draws a phone-sized layout big enough to fill the frame', () => {
+    // The whole point of the layout width: a 1080-wide reel of a 400-wide
+    // screen is drawn at 2.7×, so the text in it is as big as it is on a phone.
+    expect(sceneScale(1080, 400)).toBeCloseTo(2.7, 5);
+    expect(sceneScale(1080, 860)).toBeCloseTo(1.256, 3);
+    expect(DEFAULT_LAYOUT_WIDTH).toBeLessThanOrEqual(430); // a phone, not a window
+  });
+
+  it('gives the box its share of that screen, not of the frame', () => {
+    expect(boxCssWidth(400, 90)).toBe(360);
+    expect(boxCssWidth(400, 100)).toBe(400);
+    // …and the two together put it at the same fraction of the frame.
+    expect(boxCssWidth(400, 90) * sceneScale(1080, 400)).toBeCloseTo(1080 * 0.9, 5);
+  });
+
+  it('opens on a composer that nearly fills the screen it is on', () => {
+    expect(DEFAULT_BOX_WIDTH_PCT).toBeGreaterThanOrEqual(85);
   });
 
   it('names the download after the frame, and the file after its container', () => {

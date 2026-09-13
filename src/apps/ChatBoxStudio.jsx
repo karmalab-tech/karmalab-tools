@@ -26,18 +26,21 @@ import { useGenerationRun } from '../shared/useGenerationRun.js';
 import { ChatBox } from './chatBox/ChatBox.jsx';
 import {
   DEFAULT_HEADLINE,
+  DEFAULT_LAYOUT_WIDTH,
   DEFAULT_MODEL_CHIP,
   DEFAULT_PLACEHOLDER,
-  METRICS,
+  LAYOUT_WIDTH_LIMITS,
 } from './chatBox/design.js';
 import {
   BOX_WIDTH_LIMITS,
   DEFAULT_BOX_WIDTH_PCT,
   RESOLUTION_PRESETS,
+  boxCssWidth,
   extensionForType,
   parseSize,
   recordingBasename,
   resolutionLabel,
+  sceneScale,
 } from './chatBox/scene.js';
 import { AUDIO_SAMPLE_RATE, recordChatBox, videoSupport } from './chatBox/record.js';
 import { decodeClip, typingTrack } from './chatBox/audio.js';
@@ -75,6 +78,7 @@ const SETTING_KEYS = [
   'text',
   'width',
   'height',
+  'layoutWidth',
   'boxWidthPct',
   'background',
   'headline',
@@ -96,6 +100,7 @@ const INITIAL = {
   text: 'Make me a video of a golden retriever surfing at sunset',
   width: '1080',
   height: '1920',
+  layoutWidth: String(DEFAULT_LAYOUT_WIDTH),
   boxWidthPct: String(DEFAULT_BOX_WIDTH_PCT),
   background: '#000000',
   headline: DEFAULT_HEADLINE,
@@ -417,6 +422,11 @@ export default function ChatBoxStudio() {
   const width = parseSize(settings.width, 1080);
   const height = parseSize(settings.height, 1920);
   const boxWidthPct = clampSetting(settings.boxWidthPct, BOX_WIDTH_LIMITS, DEFAULT_BOX_WIDTH_PCT);
+  // The screen the box is laid out on: at 400 a 1080-wide frame is a phone held
+  // up close, at 900 it is a desktop window shrunk to fit.
+  const layoutWidth = Math.round(
+    clampSetting(settings.layoutWidth, LAYOUT_WIDTH_LIMITS, DEFAULT_LAYOUT_WIDTH)
+  );
   const fps = Math.round(clampSetting(settings.fps, LIMITS.fps, DEFAULTS.fps));
 
   const plan = useMemo(
@@ -522,9 +532,14 @@ export default function ChatBoxStudio() {
     return { width: Math.round(width * scale), height: Math.round(height * scale) };
   }, [height, stage.height, stage.width, width]);
 
-  // 720 CSS pixels of chat box, shown at whatever fraction of the frame the box
-  // width setting asks for — the same sum scene.js does at full resolution.
-  const boxScale = frame.width ? (frame.width * boxWidthPct) / 100 / METRICS.boxWidth : 1;
+  // The stage does the recorder's sum at the size it happens to be on screen:
+  // the box is laid out at its CSS width and scaled by frame ÷ layout, exactly
+  // as scene.js scales it at full resolution.
+  const boxWidthCss = boxCssWidth(layoutWidth, boxWidthPct);
+  const boxScale = frame.width ? sceneScale(frame.width, layoutWidth) : 1;
+  // What the recording will scale it by — the stage is only as big as the pane
+  // it is in, so its own scale is not the one to quote.
+  const recordScale = sceneScale(width, layoutWidth);
 
   // Half the height the box has yet to grow into, in frame pixels: the shift
   // that keeps its bottom edge — the controls row and the send button — where
@@ -658,6 +673,7 @@ export default function ChatBoxStudio() {
       const result = await recordChatBox({
         width,
         height,
+        layoutWidth,
         boxWidthPct,
         background: settings.background,
         headline: settings.headline,
@@ -729,7 +745,7 @@ export default function ChatBoxStudio() {
               <div
                 className="absolute left-1/2 top-1/2"
                 style={{
-                  width: METRICS.boxWidth,
+                  width: boxWidthCss,
                   transform: `translate(-50%, calc(-50% + ${boxLift}px)) scale(${boxScale})`,
                 }}
               >
@@ -752,7 +768,8 @@ export default function ChatBoxStudio() {
 
         <div className="flex items-center justify-center gap-2 font-mono text-[11.5px] text-text-dim">
           <span>
-            {resolutionLabel(width, height)} · box {Math.round(boxWidthPct)}% · {durationText}
+            {resolutionLabel(width, height)} · laid out at {layoutWidth}px, drawn at{' '}
+            {recordScale.toFixed(1)}× · {durationText}
           </span>
           <button
             type="button"
@@ -831,9 +848,21 @@ export default function ChatBoxStudio() {
             />
           </div>
 
+          <NumberField
+            id="layoutWidthInput"
+            label="Lay it out as a screen this wide"
+            value={settings.layoutWidth}
+            onChange={(v) => set('layoutWidth', v)}
+            suffix="px"
+            min={LAYOUT_WIDTH_LIMITS[0]}
+            max={LAYOUT_WIDTH_LIMITS[1]}
+            step={10}
+            help={`The box is built at this width and drawn ${recordScale.toFixed(1)}× bigger to fill the ${width}px frame — 400px is a phone, which is what a reel is watched on. The resolution above does not change.`}
+          />
+
           <div className={FIELD}>
             <label className={LABEL} htmlFor="boxWidthInput">
-              Box width — {Math.round(boxWidthPct)}% of the frame
+              Box width — {Math.round(boxWidthPct)}% of that screen
             </label>
             <input
               id="boxWidthInput"
@@ -845,8 +874,8 @@ export default function ChatBoxStudio() {
               className="w-full accent-accent cursor-pointer"
             />
             <div className={FIELD_HELP}>
-              Everything in the box scales with it — the text is laid out at the target resolution,
-              not scaled up from the screen.
+              {boxWidthCss}px of box, the way a composer sits on a phone. Everything in it is drawn
+              at the target resolution rather than scaled up from the screen.
             </div>
           </div>
 

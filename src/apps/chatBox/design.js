@@ -6,10 +6,17 @@
 // rather than something that merely resembles it. When a size changes here,
 // it changes in both.
 //
-// METRICS are CSS pixels at scale 1 — the size the box has in the browser. The
-// recording multiplies every one of them by a scale taken from the target
-// resolution (see scene.js), which is what makes a 1080×1920 frame crisp rather
-// than an upscaled screenshot.
+// METRICS are CSS pixels at scale 1 — the size the box has in a browser window
+// LAYOUT_WIDTH wide. The recording multiplies every one of them by
+// `frame width / layout width` (see scene.js), which is what makes a 1080×1920
+// frame crisp rather than an upscaled screenshot — and what decides how big the
+// box reads in it.
+//
+// The layout width is the whole of that decision. Lay the box out at 400 and a
+// 1080-wide frame scales it 2.7×: phone proportions, the text as big in the
+// frame as it is on a phone. Lay it out at 860 and the same frame scales it
+// 1.26× and you get a desktop window shrunk into a reel, which is not what
+// anybody wants to watch on a phone.
 
 export const COLORS = {
   // The KarmaLab tokens from src/shared/theme.css. Canvas has no CSS variables,
@@ -40,9 +47,12 @@ export const FONT_SPECS = [
   `400 13px ${FONT_MONO}`,
 ];
 
+// The screen the box is laid out on, in CSS pixels: a phone, by default, which
+// is what a reel is watched on.
+export const DEFAULT_LAYOUT_WIDTH = 400;
+export const LAYOUT_WIDTH_LIMITS = [240, 1400];
+
 export const METRICS = {
-  // The box's own width. Everything else is laid out inside it.
-  boxWidth: 720,
   radius: 26,
   padTop: 18,
   padRight: 18,

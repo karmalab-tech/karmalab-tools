@@ -5,8 +5,9 @@ import { DEFAULT_MODEL_CHIP, DEFAULT_PLACEHOLDER, ICONS } from './design.js';
 // The chat box itself: the thing the studio records.
 //
 // Every size in the markup below is a METRICS value written out as a Tailwind
-// arbitrary value (720px wide, 26px radius, 19px text, 34px controls, 56px
-// thumbnails…). They are spelled out rather than interpolated because Tailwind
+// arbitrary value (26px radius, 19px text, 34px controls, 56px thumbnails…) —
+// the box's own width comes from whoever renders it, since that is the layout
+// width the studio is set to. They are spelled out rather than interpolated because Tailwind
 // needs to see the class strings, so a change in design.js means a change here
 // too — and scene.js, which paints the same box on a canvas, reads those
 // numbers directly.
@@ -95,7 +96,7 @@ export function ChatBox({
   const canSend = text.trim().length > 0 || attachments.length > 0;
 
   return (
-    <div className="w-[720px] max-w-full flex flex-col items-center">
+    <div className="w-full flex flex-col items-center">
       {headline && (
         <h1 className="text-[46px] font-normal text-white text-center tracking-[-0.01em] m-0 mb-[32px]">
           {headline}
