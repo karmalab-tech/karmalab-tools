@@ -13,6 +13,15 @@
 
 import { cachedBlob } from './outputCache.js';
 
+// What to say when a zip — or a video — comes up short. Replicate deletes
+// results an hour after they are made, so this is what an old run looks like
+// when its images were never cached (a browser with no IndexedDB, or a cache
+// since evicted).
+export const expiredMessage = (missing) =>
+  `${missing.length} ${missing.length === 1 ? 'image' : 'images'} could not be included — ` +
+  'Replicate deletes results an hour after they are made, and these were not cached. ' +
+  `Missing: ${missing.join(', ')}`;
+
 export function triggerDownload(href, filename) {
   const a = document.createElement('a');
   a.href = href;

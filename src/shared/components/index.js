@@ -16,3 +16,4 @@ export { ToolsSidebar } from './ToolsSidebar.jsx';
 export { ApiKeyModal } from './ApiKeyModal.jsx';
 export { StatusPill } from './StatusPill.jsx';
 export { RunHistoryModal } from './RunHistoryModal.jsx';
+export { DownloadModal } from './DownloadModal.jsx';

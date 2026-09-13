@@ -1,6 +1,8 @@
 import { useEffect, useState } from 'react';
-import { Button, Input, Panel } from '../../shared/components';
-import { FIELD, FIELD_HELP, LABEL } from '../../shared/fields.js';
+import { Button } from './Button.jsx';
+import { Input } from './Input.jsx';
+import { Panel } from './Panel.jsx';
+import { FIELD, FIELD_HELP, LABEL } from '../fields.js';
 import {
   DEFAULT_MS_PER_IMAGE,
   MAX_MS_PER_IMAGE,
@@ -9,13 +11,16 @@ import {
   probeEncoding,
   totalDurationMs,
   videoSupport,
-} from './video.js';
+} from '../imageVideo.js';
 
-// The two ways a finished chain comes off the page: as one video with each
-// image held for a moment, or as the images themselves in a zip.
+// The two ways a set of finished images comes off the page: as one video with
+// each image held for a moment, or as the images themselves in a zip. Shared by
+// both image tools — a chain and a batch download the same two ways, only the
+// wording around them differs.
 //
-// The video is built in this browser (see video.js), so the controls that shape
-// it live here rather than being options on a download button.
+// The video is built in this browser (see src/shared/imageVideo.js), so the
+// controls that shape it live here rather than being options on a download
+// button.
 
 const seconds = (ms) => `${(ms / 1000).toFixed(ms < 10000 ? 1 : 0)}s`;
 
@@ -23,7 +28,16 @@ const SECTION = 'border border-panel-border rounded-[14px] bg-panel-alt p-4';
 
 const SECTION_TITLE = 'font-mono text-[12px] tracking-[0.03em] uppercase text-text-dim mb-3';
 
-export function DownloadModal({ open, imageCount, onClose, onDownloadVideo, onDownloadZip }) {
+export function DownloadModal({
+  open,
+  imageCount,
+  title = 'Download',
+  loopHelp = 'Plays through the images and back down them, so the video loops without a jump.',
+  zipHelp = 'Every image as a PNG, numbered in order.',
+  onClose,
+  onDownloadVideo,
+  onDownloadZip,
+}) {
   const [msText, setMsText] = useState(String(DEFAULT_MS_PER_IMAGE));
   const [loop, setLoop] = useState(false);
   const [videoLabel, setVideoLabel] = useState('');
@@ -100,7 +114,7 @@ export function DownloadModal({ open, imageCount, onClose, onDownloadVideo, onDo
       onClick={onClose}
     >
       <Panel
-        title="Download the chain"
+        title={title}
         className="w-full max-w-135 max-h-[85vh] overflow-y-auto"
         onClick={(e) => e.stopPropagation()}
       >
@@ -132,9 +146,7 @@ export function DownloadModal({ open, imageCount, onClose, onDownloadVideo, onDo
                   />
                   <span>
                     <span className="text-[14px] block">Loop</span>
-                    <span className={FIELD_HELP}>
-                      Plays down the chain and back up it, so the video loops without a jump.
-                    </span>
+                    <span className={FIELD_HELP}>{loopHelp}</span>
                   </span>
                 </label>
                 <div className={`${FIELD_HELP} !mt-0 mb-3`}>
@@ -168,9 +180,7 @@ export function DownloadModal({ open, imageCount, onClose, onDownloadVideo, onDo
 
           <section className={SECTION}>
             <h3 className={SECTION_TITLE}>Images</h3>
-            <div className={`${FIELD_HELP} !mt-0 mb-3`}>
-              Every step as a PNG, numbered in chain order.
-            </div>
+            <div className={`${FIELD_HELP} !mt-0 mb-3`}>{zipHelp}</div>
             <Button variant="secondary" onClick={buildZip} disabled={busy} className="w-full">
               {zipLabel || 'Download .zip'}
             </Button>
