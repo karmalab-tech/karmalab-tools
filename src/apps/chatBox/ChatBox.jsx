@@ -107,7 +107,7 @@ export function ChatBox({
         ref={boxRef}
         data-testid="chat-box"
         className={[
-          'relative w-full bg-panel border rounded-[26px] pt-[18px] pr-[18px] pb-[14px] pl-[22px]',
+          'relative w-full bg-panel border rounded-[26px] pt-[18px] pr-[14px] pb-[14px] pl-[18px]',
           'flex flex-col gap-[14px] shadow-[0_8px_40px_rgba(0,0,0,0.45)]',
           'transition-[border-color,background-color] duration-150',
           dragging ? 'border-accent bg-accent-dim' : 'border-panel-border',
@@ -144,7 +144,7 @@ export function ChatBox({
                   src={a.dataUri}
                   alt=""
                   title={a.name}
-                  className="w-[56px] h-[56px] rounded-[12px] object-cover block bg-black border border-[#3a3a3a]"
+                  className="w-[116px] h-[116px] rounded-[16px] object-cover block bg-black border border-[#3a3a3a]"
                 />
                 {!readOnly && (
                   <button
