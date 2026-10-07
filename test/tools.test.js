@@ -21,7 +21,15 @@ import {
   planEviction,
 } from '../src/shared/outputCache.js';
 import { routes } from '../server/routes.js';
-import { runCounts, runStatus, runTabTitle, serializeItem, uiStatus } from '../src/shared/runs.js';
+import {
+  normalizeRun,
+  runCounts,
+  runStatus,
+  runTabTitle,
+  serializeItem,
+  serializeRun,
+  uiStatus,
+} from '../src/shared/runs.js';
 import { buildItems, splitPrompts } from '../src/apps/batchVideo/items.js';
 import {
   MAX_STEPS,
@@ -241,6 +249,25 @@ describe('serializeItem', () => {
 
   it('omits keys that were never set rather than writing undefined', () => {
     expect(Object.keys(serializeItem({ id: 'r1', status: 'queued' }))).toEqual(['id', 'status']);
+  });
+});
+
+describe('the settings a run was made with', () => {
+  const items = [{ id: 'r1', status: 'failed' }];
+  const settings = { modelId: 'm', aspect: '9:16', extraValues: {} };
+
+  it('survive being stored and read back, so a retry can reuse them', () => {
+    const stored = serializeRun({ id: 'a', title: 't', settings }, items);
+    expect(normalizeRun(JSON.parse(JSON.stringify(stored))).settings).toEqual(settings);
+  });
+
+  it('are left off a run that never had any', () => {
+    const stored = serializeRun({ id: 'a', title: 't' }, items);
+    expect(normalizeRun(stored)).not.toHaveProperty('settings');
+  });
+
+  it('are dropped when storage holds something that is not an object', () => {
+    expect(normalizeRun({ id: 'a', items, settings: 'oops' })).not.toHaveProperty('settings');
   });
 });
 

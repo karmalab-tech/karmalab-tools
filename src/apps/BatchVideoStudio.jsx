@@ -148,8 +148,9 @@ export default function BatchVideoStudio() {
   const cancelRef = useRef(false);
   const counterRef = useRef(0);
   // What the run on screen was sent with, so a retry asks for the same thing even
-  // if the form has changed since. Gone after a reload — the form is used then.
-  const snapshotRef = useRef(null);
+  // if the form has changed since. The run keeps the same in `run.settings`, which
+  // is what a reload or a run opened from History goes back to.
+  const snapshotRef = useRef(null); // { runId, settings }
 
   // The run itself — its cards, their persistence, recovering an unfinished run
   // when the tab is reopened, the history of past runs, the tab title and the
@@ -222,16 +223,22 @@ export default function BatchVideoStudio() {
       setKeyModalOpen(true);
       return;
     }
-    const snapshot = snapshotRef.current || {
-      modelId: modelKey,
-      cfg,
-      optionValues: { ...optionValues },
-    };
+    const fromThisTab = snapshotRef.current?.runId === gen.run?.id;
+    const saved = gen.run?.settings;
+    const snapshot = fromThisTab
+      ? snapshotRef.current.settings
+      : saved && MODEL_CONFIGS[saved.modelId]
+        ? {
+            modelId: saved.modelId,
+            cfg: MODEL_CONFIGS[saved.modelId],
+            optionValues: { ...defaultOptionValues(saved.modelId), ...saved.optionValues },
+          }
+        : { modelId: modelKey, cfg, optionValues: { ...optionValues } };
     // Start frames are held in memory only, so after a reload an item no longer
     // has its own. The shared one stands in for it — but not for a per-frame
     // batch, where each video had a different image.
     let startFrame = item.startFrame;
-    if (!startFrame && !snapshotRef.current && byPrompts) startFrame = sharedFrame?.dataUri || null;
+    if (!startFrame && !fromThisTab && byPrompts) startFrame = sharedFrame?.dataUri || null;
     if (!startFrame && snapshot.cfg.requiresImage) {
       setRunHint({
         text: 'Its start frame is gone with the old tab — run the batch again to regenerate it.',
@@ -299,14 +306,15 @@ export default function BatchVideoStudio() {
     setIsRunning(true);
 
     // A new run replaces the one on screen, which moves to the history list.
-    gen.startRun({
+    // The settings can change while the batch runs — freeze what it sends.
+    const settings = { modelId: modelKey, cfg, optionValues: { ...optionValues } };
+    const runId = gen.startRun({
       title: `${items.length} video${items.length === 1 ? '' : 's'} · ${cfg.label}`,
       items,
+      settings: { modelId: modelKey, optionValues: { ...optionValues } },
     });
-
-    // The settings can change while the batch runs — freeze what it sends.
-    snapshotRef.current = { modelId: modelKey, cfg, optionValues: { ...optionValues } };
-    const runOne = (item) => runItem(item, snapshotRef.current, key);
+    snapshotRef.current = { runId, settings };
+    const runOne = (item) => runItem(item, settings, key);
 
     let cursor = 0;
     let done = 0;

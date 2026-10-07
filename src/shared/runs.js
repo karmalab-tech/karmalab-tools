@@ -62,6 +62,8 @@ export function serializeItem(item) {
   return out;
 }
 
+const isPlainObject = (v) => !!v && typeof v === 'object' && !Array.isArray(v);
+
 // A run as it goes to storage: its metadata plus the persistable part of each
 // item. `origin` is UI-only state (whether the run is live or being viewed out
 // of history) and is deliberately not written.
@@ -71,6 +73,7 @@ export function serializeRun(run, items) {
     title: run.title || 'Generation',
     createdAt: run.createdAt || Date.now(),
     finishedAt: run.finishedAt || null,
+    ...(isPlainObject(run.settings) ? { settings: run.settings } : {}),
     items: items.map(serializeItem),
   };
 }
@@ -91,6 +94,10 @@ export function normalizeRun(raw) {
     // Which tool made it — set on the shared history list, where runs from every
     // tool sit together. A run in progress belongs to the tool holding it.
     ...(typeof raw.tool === 'string' && raw.tool ? { tool: raw.tool } : {}),
+    // What the run was generated with (model, aspect ratio, …), so a retry can
+    // ask for the same thing. Plain JSON only — a tool keeps data URIs and API
+    // keys out of it.
+    ...(isPlainObject(raw.settings) ? { settings: raw.settings } : {}),
     items,
   };
 }
