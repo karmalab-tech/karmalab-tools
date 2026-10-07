@@ -8,6 +8,7 @@ import {
 } from './replicate.js';
 import { cacheKey, cacheOutput, forgetRuns } from './outputCache.js';
 import { isActiveItem, newRunId, runCounts, runTabTitle, serializeRun, uiStatus } from './runs.js';
+import { historyRunUrl, parseHistoryHash } from './historyTools.js';
 import { useUnloadGuard } from './useUnloadGuard.js';
 
 // Everything the generation tools share about a run: the item list, its
@@ -248,19 +249,57 @@ export function useGenerationRun({
     [notify, refreshItem, remote, requestFinish]
   );
 
+  // Put a finished run on screen and refresh it, so anything that moved on
+  // since it was archived comes back with its current state.
+  const showHistoryEntry = useCallback(
+    (entry) => {
+      const meta = {
+        id: entry.id,
+        title: entry.title,
+        createdAt: entry.createdAt,
+        finishedAt: entry.finishedAt,
+        origin: 'history',
+      };
+      runRef.current = meta;
+      itemsRef.current = entry.items;
+      setRun(meta);
+      setItems(entry.items);
+      setHistoryOpen(false);
+      refreshRun({ storedItems: entry.items, restored: false });
+    },
+    [refreshRun]
+  );
+
   // On open: load the history list, and if a run was still going when the tab
   // closed, put it back on screen and resume it. A run that had already landed
   // just moves to history.
+  //
+  // The history list is shared by every tool, so a run picked from another tool
+  // arrives as `#history=<id>` on this tool's URL. It is shown once nothing is
+  // being recovered; an unfinished run of this tool's own takes the screen first.
   useEffect(() => {
     if (loadedRef.current) return;
     loadedRef.current = true;
+    const target = parseHistoryHash(window.location.hash);
+    if (target)
+      window.history.replaceState(null, '', window.location.pathname + window.location.search);
+    const openTarget = () => {
+      const all = storage.loadHistory();
+      setHistory(all);
+      const entry = target && all.find((r) => r.tool === storage.namespace && r.id === target);
+      if (entry) showHistoryEntry(entry);
+      else if (target) notify('That generation is no longer in this browser’s history.', true);
+    };
     setHistory(storage.loadHistory());
     const stored = storage.loadCurrentRun();
-    if (!stored) return;
+    if (!stored) {
+      openTarget();
+      return;
+    }
 
     if (!stored.items.some(isActiveItem)) {
       storage.archiveRun(stored);
-      setHistory(storage.loadHistory());
+      openTarget();
       return;
     }
 
@@ -276,7 +315,7 @@ export function useGenerationRun({
             : it
         ),
       });
-      setHistory(storage.loadHistory());
+      openTarget();
       return;
     }
 
@@ -288,10 +327,21 @@ export function useGenerationRun({
       origin: 'live',
     });
     setItems(stored.items);
-    refreshRun({ storedItems: stored.items, restored: true, hint: restoreHint });
+    refreshRun({
+      storedItems: stored.items,
+      restored: true,
+      hint: [
+        restoreHint,
+        target
+          ? 'The generation you picked from History is still there — open it once this one settles.'
+          : '',
+      ]
+        .filter(Boolean)
+        .join(' '),
+    });
     // Once per mount — `loadedRef` above, not an empty dependency list, so the
     // deps stay honest.
-  }, [refreshRun, remote, restoreHint, storage]);
+  }, [notify, refreshRun, remote, restoreHint, showHistoryEntry, storage]);
 
   const startRun = useCallback(
     ({ title, items: initialItems = [] }) => {
@@ -325,16 +375,23 @@ export function useGenerationRun({
     setRun(meta);
   }, []);
 
-  // Open a finished run: show its items again and refresh them, so anything
-  // that moved on since it was archived comes back with its current state.
+  // Open a finished run from the history list. One from this tool is shown
+  // here; one from another tool is opened in that tool, which is where its
+  // cards and downloads live.
   //
   // Swapping the view while something is in flight stops this tab from tracking
   // it, so that is asked about first. It is not lost either way: the run is
   // archived with its prediction ids, and reopening it from history refreshes it
-  // and picks the polling back up.
+  // and picks the polling back up. Leaving for another tool needs no question
+  // of its own — the unload guard asks, and the run stays recoverable.
   const openHistoryRun = useCallback(
-    (runId) => {
-      const entry = storage.loadHistory().find((r) => r.id === runId);
+    (runId, tool = storage.namespace) => {
+      if (tool !== storage.namespace) {
+        const url = historyRunUrl(tool, runId);
+        if (url) window.location.assign(url);
+        return;
+      }
+      const entry = storage.loadHistory().find((r) => r.tool === tool && r.id === runId);
       if (!entry) return;
       if (runRef.current?.origin === 'live' && itemsRef.current.some(isActiveItem)) {
         const ok = window.confirm(
@@ -345,29 +402,18 @@ export function useGenerationRun({
         if (!ok) return;
       }
       archive();
-      const meta = {
-        id: entry.id,
-        title: entry.title,
-        createdAt: entry.createdAt,
-        finishedAt: entry.finishedAt,
-        origin: 'history',
-      };
-      runRef.current = meta;
-      itemsRef.current = entry.items;
-      setRun(meta);
-      setItems(entry.items);
-      setHistoryOpen(false);
-      refreshRun({ storedItems: entry.items, restored: false });
+      showHistoryEntry(entry);
     },
-    [archive, refreshRun, storage]
+    [archive, showHistoryEntry, storage]
   );
 
   // Clearing history drops the cached files of those runs with it — a run that
   // is gone from the list has no way back to its results, so keeping megabytes
   // of them would just be litter. (A run pushed off the end of the capped list
-  // keeps its files until the cache evicts them by age.)
+  // keeps its files until the cache evicts them by age.) The list is shared, so
+  // this is every tool's runs, each under the tool that made it.
   const clearHistory = useCallback(() => {
-    const gone = storage.loadHistory().map((r) => `${storage.namespace}/${r.id}`);
+    const gone = storage.loadHistory().map((r) => `${r.tool}/${r.id}`);
     storage.clearHistory();
     forgetRuns(gone);
     setHistory([]);
@@ -403,6 +449,7 @@ export function useGenerationRun({
       open: historyOpen,
       runs: history,
       currentRunId: run?.id || null,
+      currentTool: storage.namespace,
       onSelect: openHistoryRun,
       onClose: () => setHistoryOpen(false),
       onClear: clearHistory,

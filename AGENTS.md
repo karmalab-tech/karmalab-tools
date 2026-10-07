@@ -160,8 +160,16 @@ touches storage — never reached for across `src/apps/`.
 ## How a run survives a closed tab
 
 `useGenerationRun` writes the run in progress to `karmalab.<tool>.currentRun` on
-every item change, and moves it to `karmalab.<tool>.runHistory` (newest first,
-capped) once nothing is in flight. On load it reads `currentRun` back: if any item
+every item change, and moves it to the history list once nothing is in flight.
+The history is the one thing not namespaced per tool: it is a single list,
+`karmalab.runHistory` (newest first, capped at `HISTORY_LIMIT` per tool), each
+run tagged with the tool that made it, and every tool's History modal shows all
+of it. Picking a run from another tool navigates there with `#history=<id>`
+(`src/shared/historyTools.js` — which also registers each tool's label and
+path); the tool shows that run on load, unless it has an unfinished run of its
+own to recover first. Clearing history clears it for every tool, cached files
+included. The old per-tool `karmalab.<tool>.runHistory` lists are folded into
+the shared one the first time any tool loads. On load it reads `currentRun` back: if any item
 is still active the run goes back on screen and each one is fetched from Replicate
 and re-polled; if they all landed, it is archived instead. Opening a run from the
 history modal does the same refresh, writing the result back into its history

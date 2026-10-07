@@ -88,6 +88,9 @@ export function normalizeRun(raw) {
     title: typeof raw.title === 'string' && raw.title ? raw.title : 'Generation',
     createdAt: Number.isFinite(raw.createdAt) ? raw.createdAt : Date.now(),
     finishedAt: Number.isFinite(raw.finishedAt) ? raw.finishedAt : null,
+    // Which tool made it — set on the shared history list, where runs from every
+    // tool sit together. A run in progress belongs to the tool holding it.
+    ...(typeof raw.tool === 'string' && raw.tool ? { tool: raw.tool } : {}),
     items,
   };
 }
