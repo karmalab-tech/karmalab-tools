@@ -126,9 +126,10 @@ export default function BatchImageStudio() {
 
   const cancelRef = useRef(false);
   const counterRef = useRef(0);
-  // What the run on screen was sent with, so a retry asks for the same thing even
-  // if the form has changed since. Gone after a reload — the form is used then.
-  const snapshotRef = useRef(null);
+  // What the run on screen was sent with, reference image included, so a retry
+  // asks for the same thing even if the form has changed since. The run itself
+  // keeps the rest (`run.settings`) across a reload; the image is only here.
+  const snapshotRef = useRef(null); // { runId, settings }
 
   // The run itself — its cards, their persistence, recovering an unfinished run
   // when the tab is reopened, the history of past runs, the tab title and the
@@ -177,6 +178,41 @@ export default function BatchImageStudio() {
     };
   }
 
+  // What goes on the run in storage: the same settings minus the reference image
+  // (a data URI) and the OpenAI key, which has its own storage.
+  function savedSettings(settings) {
+    const { referenceImage: ref, extraValues: extras, ...rest } = settings;
+    const extraValuesSaved = { ...extras };
+    delete extraValuesSaved.openai_api_key;
+    return {
+      modelId: rest.modelId,
+      suffix: rest.suffix,
+      aspect: rest.aspect,
+      extraValues: extraValuesSaved,
+      hasReference: !!ref,
+    };
+  }
+
+  // The settings the run on screen was generated with — from this tab if it made
+  // the run, otherwise from what was saved with it (after a reload, or a run
+  // opened from History). A run saved before settings were kept has none, and
+  // gets the form.
+  function runSettings() {
+    if (snapshotRef.current && snapshotRef.current.runId === gen.run?.id)
+      return snapshotRef.current.settings;
+    const saved = gen.run?.settings;
+    if (!saved || !MODEL_CONFIGS[saved.modelId]) return currentSettings();
+    return {
+      modelId: saved.modelId,
+      cfg: MODEL_CONFIGS[saved.modelId],
+      suffix: saved.suffix || '',
+      aspect: saved.aspect,
+      referenceImage: saved.hasReference ? referenceImage?.dataUri || null : null,
+      extraValues: { ...saved.extraValues, openai_api_key: openaiKey },
+      hasReference: !!saved.hasReference,
+    };
+  }
+
   async function runItem(item, settings, key) {
     if (cancelRef.current) {
       gen.updateItem(item.id, { status: 'failed', error: 'Cancelled before it started.' });
@@ -209,7 +245,14 @@ export default function BatchImageStudio() {
       setKeyModalOpen(true);
       return;
     }
-    const settings = snapshotRef.current || currentSettings();
+    const settings = runSettings();
+    if (settings.hasReference && !settings.referenceImage) {
+      setRunHint({
+        text: 'Its reference image is gone with the old tab — upload it again to retry.',
+        isError: true,
+      });
+      return;
+    }
     if ((settings.cfg.extraFields || []).some((f) => f.type === 'apiKey') && !openaiKey.trim()) {
       setRunHint({ text: 'This model needs your OpenAI API key — add it first.', isError: true });
       setKeyModalOpen(true);
@@ -263,14 +306,16 @@ export default function BatchImageStudio() {
       outputUrl: null,
       error: null,
     }));
-    gen.startRun({
+    const settings = { ...currentSettings(), hasReference: !!referenceImage };
+    const runId = gen.startRun({
       title: `${items.length} image${items.length === 1 ? '' : 's'} · ${cfg.label}`,
       items,
+      settings: savedSettings(settings),
     });
 
     const key = apiKey.trim();
-    snapshotRef.current = currentSettings();
-    const runOne = (item) => runItem(item, snapshotRef.current, key);
+    snapshotRef.current = { runId, settings };
+    const runOne = (item) => runItem(item, settings, key);
 
     let cursor = 0;
     let done = 0;

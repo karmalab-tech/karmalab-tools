@@ -232,13 +232,13 @@ export default function ImageChainStudio() {
 
   // One step's card, before it has been generated. `from` is the step whose
   // image it starts from, for the line on the card.
-  function newStep(index, from) {
+  function newStep(index, from, promptText = prompt.trim()) {
     return {
       id: stepId(index),
       index,
       predictionId: null,
       status: 'queued',
-      prompt: prompt.trim(),
+      prompt: promptText,
       label: stepLabel(index),
       basename: stepBasename(index),
       from,
@@ -250,21 +250,21 @@ export default function ImageChainStudio() {
   // Generate one step that is already on screen: create + poll the prediction.
   // Returns { ok, outputUrl } — the URL is what the next step uses as its
   // reference image.
-  async function runStep(step, reference, key) {
+  async function runStep(step, reference, key, settings) {
     const { id, prompt: promptText } = step;
     try {
-      const input = buildImageInput(cfg, {
+      const input = buildImageInput(MODEL_CONFIGS[settings.modelId], {
         promptText,
-        aspect,
+        aspect: settings.aspect,
         // Replicate fetches a reference image by URL server-side, so a step
         // hands the next one its output URL rather than the image itself.
         referenceImage: reference,
         // The OpenAI key lives in the shared key storage, not extraValues —
         // merge it in so buildImageInput picks it up like any other extra field.
-        extraValues: { ...extraValues, openai_api_key: openaiKey },
+        extraValues: { ...settings.extraValues, openai_api_key: openaiKey },
       });
       gen.updateItem(id, { status: 'running' });
-      const prediction = await createPrediction(modelKey, input, key);
+      const prediction = await createPrediction(settings.modelId, input, key);
       // Storing the prediction id is what makes the step recoverable: the chain
       // is persisted on every change, so a closed tab can fetch it back.
       gen.updateItem(id, { predictionId: prediction.id });
@@ -285,13 +285,29 @@ export default function ImageChainStudio() {
     setRunHint(hint);
   }
 
-  async function runChain(total, startIndex, initialReference, initialFrom, key) {
+  // The settings a chain is generated with, saved on the run so a retry — even
+  // after a reload, or from History — asks for the same thing. The OpenAI key is
+  // left out (it has its own storage) and so is the reference image (a data URI).
+  function currentSettings() {
+    const extras = { ...extraValues };
+    delete extras.openai_api_key;
+    return { modelId: modelKey, aspect, extraValues: extras };
+  }
+
+  // What a step on screen was generated with: its run's saved settings, or the
+  // form for a run from before they were saved (or a model since removed).
+  function runSettings() {
+    const saved = gen.run?.settings;
+    return saved && MODEL_CONFIGS[saved.modelId] ? saved : currentSettings();
+  }
+
+  async function runChain(total, startIndex, initialReference, initialFrom, key, settings) {
     let reference = initialReference;
     let from = initialFrom;
     for (let i = 0; i < total; i++) {
       const step = newStep(startIndex + i, from);
       gen.appendItems([step]);
-      const res = await runStep(step, reference, key);
+      const res = await runStep(step, reference, key, settings);
       if (cancelRef.current) {
         endChain({ text: `Cancelled — ${i} of ${total} steps finished.`, isError: false });
         return;
@@ -315,19 +331,19 @@ export default function ImageChainStudio() {
   // Everything a run needs before it can start: the keys, a prompt and — for
   // anything but a single-step retry — a sane step count. Returns the Replicate
   // token, or null after leaving a hint about what is missing.
-  function checkedKey({ needsStepCount = true } = {}) {
+  function checkedKey({ needsStepCount = true, settings = currentSettings(), promptText } = {}) {
     const key = apiKey.trim();
     if (!key) {
       setRunHint({ text: 'Add your Replicate API token first.', isError: true });
       setKeyModalOpen(true);
       return null;
     }
-    if (needsOpenaiKey(cfg) && !openaiKey.trim()) {
+    if (needsOpenaiKey(MODEL_CONFIGS[settings.modelId]) && !openaiKey.trim()) {
       setRunHint({ text: 'This model needs your OpenAI API key — add it first.', isError: true });
       setKeyModalOpen(true);
       return null;
     }
-    if (!prompt.trim()) {
+    if (!(promptText ?? prompt).trim()) {
       setRunHint({ text: 'Write a prompt first.', isError: true });
       return null;
     }
@@ -344,11 +360,12 @@ export default function ImageChainStudio() {
     if (!key) return;
 
     // A new chain replaces the one on screen, which moves to the history list.
-    gen.startRun({ title: chainTitle(cfg.label), items: [] });
+    const settings = currentSettings();
+    gen.startRun({ title: chainTitle(cfg.label), items: [], settings });
     setRunHint({ text: '', isError: false });
     cancelRef.current = false;
     setIsRunning(true);
-    runChain(stepCount, 0, firstReference?.dataUri || null, '', key);
+    runChain(stepCount, 0, firstReference?.dataUri || null, '', key, settings);
   }
 
   // Run again on a finished chain: more steps, continuing from its last image,
@@ -363,7 +380,10 @@ export default function ImageChainStudio() {
     cancelRef.current = false;
     setIsRunning(true);
     gen.continueRun();
-    runChain(stepCount, nextStepIndex(steps), source.outputUrl, sourceLabel(source), key);
+    // Carrying on uses the form as it is now, and the run is recorded as such.
+    const settings = currentSettings();
+    gen.setRunSettings(settings);
+    runChain(stepCount, nextStepIndex(steps), source.outputUrl, sourceLabel(source), key, settings);
   }
 
   // Retry a step that failed, in place: same number, and the same image it was
@@ -373,13 +393,16 @@ export default function ImageChainStudio() {
   // to continue from yet.
   async function retryStep(step) {
     if (busy) return;
-    const key = checkedKey({ needsStepCount: false });
+    // Same model, aspect ratio and prompt as the step had, not whatever the form
+    // says now.
+    const settings = runSettings();
+    const key = checkedKey({ needsStepCount: false, settings, promptText: step.prompt || '' });
     if (!key) return;
 
     const index = step.index ?? 0;
     const before = chainSource(steps, index);
     const reference = before ? before.outputUrl : firstReference?.dataUri || null;
-    const fresh = newStep(index, sourceLabel(before));
+    const fresh = newStep(index, sourceLabel(before), step.prompt || '');
 
     setRunHint({ text: '', isError: false });
     cancelRef.current = false;
@@ -388,7 +411,7 @@ export default function ImageChainStudio() {
     // part of it rather than of nothing.
     gen.continueRun();
     gen.setItems((prev) => prev.map((it) => (it.id === step.id ? fresh : it)));
-    const res = await runStep(fresh, reference, key);
+    const res = await runStep(fresh, reference, key, settings);
     endChain(
       res.ok
         ? {

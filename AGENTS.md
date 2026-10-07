@@ -187,6 +187,14 @@ Two details are easy to get wrong:
   progress in one lags the other; sorting that out means a `storage`-event
   listener or a lock, and neither is here.
 
+A run also carries `settings` — what it was generated with (model, aspect ratio,
+options), plain JSON, never a data URI or an API key — so a retry asks for the
+same thing even after a reload or from History instead of reading the form. Tools
+pass it to `startRun({ settings })`; the Image Chain Studio updates it with
+`setRunSettings()` when a chain carries on under changed settings. Things too big
+or secret to store (a reference image) stay in memory, and a retry that needs one
+that is gone says so.
+
 The pre-run-model format (a flat `pendingJobs` list) is migrated into a run on
 first read, so a tab closed before this shipped still recovers.
 

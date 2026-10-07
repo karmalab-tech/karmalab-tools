@@ -47,7 +47,7 @@ export function useGenerationRun({
   onNotice,
 } = {}) {
   const [items, setItems] = useState([]);
-  // { id, title, createdAt, finishedAt, origin: 'live' | 'history' }
+  // { id, title, createdAt, finishedAt, settings, origin: 'live' | 'history' }
   const [run, setRun] = useState(null);
   const [history, setHistory] = useState([]);
   const [refreshing, setRefreshing] = useState(false);
@@ -258,6 +258,7 @@ export function useGenerationRun({
         title: entry.title,
         createdAt: entry.createdAt,
         finishedAt: entry.finishedAt,
+        settings: entry.settings,
         origin: 'history',
       };
       runRef.current = meta;
@@ -324,6 +325,7 @@ export function useGenerationRun({
       title: stored.title,
       createdAt: stored.createdAt,
       finishedAt: null,
+      settings: stored.settings,
       origin: 'live',
     });
     setItems(stored.items);
@@ -344,13 +346,14 @@ export function useGenerationRun({
   }, [notify, refreshRun, remote, restoreHint, showHistoryEntry, storage]);
 
   const startRun = useCallback(
-    ({ title, items: initialItems = [] }) => {
+    ({ title, items: initialItems = [], settings }) => {
       archive();
       const meta = {
         id: newRunId(),
         title: title || 'Generation',
         createdAt: Date.now(),
         finishedAt: null,
+        settings,
         origin: 'live',
       };
       runRef.current = meta;
@@ -371,6 +374,16 @@ export function useGenerationRun({
     const current = runRef.current;
     if (!current || current.origin === 'live') return;
     const meta = { ...current, origin: 'live', finishedAt: null };
+    runRef.current = meta;
+    setRun(meta);
+  }, []);
+
+  // Replace what the run on screen is recorded as generated with — the Image
+  // Chain Studio does this when a chain carries on under changed settings.
+  const setRunSettings = useCallback((settings) => {
+    const current = runRef.current;
+    if (!current) return;
+    const meta = { ...current, settings };
     runRef.current = meta;
     setRun(meta);
   }, []);
@@ -443,6 +456,7 @@ export function useGenerationRun({
     startRun,
     finishRun: requestFinish,
     continueRun,
+    setRunSettings,
     viewingHistory: run?.origin === 'history',
     openHistory: () => setHistoryOpen(true),
     historyModal: {
