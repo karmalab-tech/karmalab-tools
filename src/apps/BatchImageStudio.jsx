@@ -45,9 +45,12 @@ const firstAspect = (modelKey) => MODEL_CONFIGS[modelKey].aspectOptions[0].value
 
 const pad = (n) => String(n).padStart(2, '0');
 
+// A mini-button that is unavailable while something is generating.
+const MINI_BTN_ACTION = `${MINI_BTN} disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:border-panel-border disabled:hover:text-text-dim`;
+
 const imageName = (item) => `${item.basename || `image-${item.id}`}.png`;
 
-function ResultCard({ result, cacheKey }) {
+function ResultCard({ result, cacheKey, busy, onRetry }) {
   const [downloading, setDownloading] = useState(false);
   const { prompt, status, outputUrl, error } = result;
   // Falls back to the result URL until the cached copy is ready, and back to it
@@ -87,6 +90,19 @@ function ResultCard({ result, cacheKey }) {
             </button>
           </div>
         )}
+        {status === 'failed' && (
+          <div className="flex gap-1.5 mt-0.5">
+            <button
+              type="button"
+              className={MINI_BTN_ACTION}
+              onClick={() => onRetry(result)}
+              disabled={busy}
+              title={busy ? 'Wait for the current run to finish' : 'Generate this image again'}
+            >
+              Retry
+            </button>
+          </div>
+        )}
       </div>
     </div>
   );
@@ -110,6 +126,9 @@ export default function BatchImageStudio() {
 
   const cancelRef = useRef(false);
   const counterRef = useRef(0);
+  // What the run on screen was sent with, so a retry asks for the same thing even
+  // if the form has changed since. Gone after a reload — the form is used then.
+  const snapshotRef = useRef(null);
 
   // The run itself — its cards, their persistence, recovering an unfinished run
   // when the tab is reopened, the history of past runs, the tab title and the
@@ -142,6 +161,74 @@ export default function BatchImageStudio() {
   function updateExtra(key, value) {
     setExtraValues((prev) => ({ ...prev, [key]: value }));
     saveKey(`extra.${key}`, value.trim());
+  }
+
+  // The settings a generation is sent with, frozen at the moment it starts.
+  function currentSettings() {
+    return {
+      modelId: modelKey,
+      cfg,
+      suffix,
+      aspect,
+      referenceImage: referenceImage?.dataUri || null,
+      // The OpenAI key lives in the shared key storage, not extraValues —
+      // merge it in so buildImageInput picks it up like any other extra field.
+      extraValues: { ...extraValues, openai_api_key: openaiKey },
+    };
+  }
+
+  async function runItem(item, settings, key) {
+    if (cancelRef.current) {
+      gen.updateItem(item.id, { status: 'failed', error: 'Cancelled before it started.' });
+      return false;
+    }
+    gen.updateItem(item.id, { status: 'running', error: null });
+    try {
+      const input = buildImageInput(settings.cfg, { promptText: item.prompt, ...settings });
+      const prediction = await createPrediction(settings.modelId, input, key);
+      // Storing the prediction id is what makes the card recoverable: the run
+      // is persisted on every change, so a closed tab can fetch it back.
+      gen.updateItem(item.id, { predictionId: prediction.id });
+      const finalData = await pollPrediction(prediction.id, key, () => cancelRef.current);
+      const outputUrl = extractOutputUrl(finalData.output);
+      if (!outputUrl) throw new Error('No image returned by the model.');
+      gen.updateItem(item.id, { status: 'succeeded', outputUrl });
+      return true;
+    } catch (err) {
+      gen.updateItem(item.id, { status: 'failed', error: friendlyErrorMessage(err) });
+      return false;
+    }
+  }
+
+  // Generate one failed card again, in place, with the settings its run used.
+  async function retryItem(item) {
+    if (busy) return;
+    const key = apiKey.trim();
+    if (!key) {
+      setRunHint({ text: 'Add your Replicate API token first.', isError: true });
+      setKeyModalOpen(true);
+      return;
+    }
+    const settings = snapshotRef.current || currentSettings();
+    if ((settings.cfg.extraFields || []).some((f) => f.type === 'apiKey') && !openaiKey.trim()) {
+      setRunHint({ text: 'This model needs your OpenAI API key — add it first.', isError: true });
+      setKeyModalOpen(true);
+      return;
+    }
+    setRunHint({ text: '', isError: false });
+    cancelRef.current = false;
+    setIsRunning(true);
+    // The run may already be in history; take it back so the retry lands in it.
+    gen.continueRun();
+    gen.updateItem(item.id, { predictionId: null, outputUrl: null });
+    const ok = await runItem(item, settings, key);
+    setIsRunning(false);
+    gen.finishRun();
+    setRunHint(
+      ok
+        ? { text: 'Retried image generated.', isError: false }
+        : { text: 'Retry failed — the card says why.', isError: true }
+    );
   }
 
   async function handleGenerate() {
@@ -181,39 +268,9 @@ export default function BatchImageStudio() {
       items,
     });
 
-    const modelId = modelKey;
     const key = apiKey.trim();
-    const snapshot = {
-      suffix,
-      aspect,
-      referenceImage: referenceImage?.dataUri || null,
-      // The OpenAI key lives in the shared key storage, not extraValues —
-      // merge it in so buildImageInput picks it up like any other extra field.
-      extraValues: { ...extraValues, openai_api_key: openaiKey },
-    };
-
-    async function runOne(item) {
-      if (cancelRef.current) {
-        gen.updateItem(item.id, { status: 'failed', error: 'Cancelled before it started.' });
-        return false;
-      }
-      gen.updateItem(item.id, { status: 'running' });
-      try {
-        const input = buildImageInput(cfg, { promptText: item.prompt, ...snapshot });
-        const prediction = await createPrediction(modelId, input, key);
-        // Storing the prediction id is what makes the card recoverable: the run
-        // is persisted on every change, so a closed tab can fetch it back.
-        gen.updateItem(item.id, { predictionId: prediction.id });
-        const finalData = await pollPrediction(prediction.id, key, () => cancelRef.current);
-        const outputUrl = extractOutputUrl(finalData.output);
-        if (!outputUrl) throw new Error('No image returned by the model.');
-        gen.updateItem(item.id, { status: 'succeeded', outputUrl });
-        return true;
-      } catch (err) {
-        gen.updateItem(item.id, { status: 'failed', error: friendlyErrorMessage(err) });
-        return false;
-      }
-    }
+    snapshotRef.current = currentSettings();
+    const runOne = (item) => runItem(item, snapshotRef.current, key);
 
     let cursor = 0;
     let done = 0;
@@ -457,7 +514,13 @@ export default function BatchImageStudio() {
           ) : (
             <div className="grid grid-cols-[repeat(auto-fill,minmax(230px,1fr))] gap-3.5 mt-1">
               {gen.items.map((r) => (
-                <ResultCard key={r.id} result={r} cacheKey={gen.outputKey(r)} />
+                <ResultCard
+                  key={r.id}
+                  result={r}
+                  cacheKey={gen.outputKey(r)}
+                  busy={busy}
+                  onRetry={retryItem}
+                />
               ))}
             </div>
           )}

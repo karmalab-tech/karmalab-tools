@@ -40,9 +40,12 @@ import {
 import { MODES, buildItems, splitPrompts } from './batchVideo/items.js';
 import { storage } from './batchVideo/storage.js';
 
+// A mini-button that is unavailable while something is generating.
+const MINI_BTN_ACTION = `${MINI_BTN} disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:border-panel-border disabled:hover:text-text-dim`;
+
 const videoName = (item) => `${item.basename || `video-${item.id}`}.mp4`;
 
-function ResultCard({ result, cacheKey }) {
+function ResultCard({ result, cacheKey, busy, onRetry }) {
   const [downloading, setDownloading] = useState(false);
   const { label, prompt, status, outputUrl, startFrame, error } = result;
 
@@ -106,6 +109,19 @@ function ResultCard({ result, cacheKey }) {
             </button>
           </div>
         )}
+        {status === 'failed' && (
+          <div className="flex gap-1.5 mt-0.5">
+            <button
+              type="button"
+              className={MINI_BTN_ACTION}
+              onClick={() => onRetry(result)}
+              disabled={busy}
+              title={busy ? 'Wait for the current run to finish' : 'Generate this video again'}
+            >
+              Retry
+            </button>
+          </div>
+        )}
       </div>
     </div>
   );
@@ -131,6 +147,9 @@ export default function BatchVideoStudio() {
 
   const cancelRef = useRef(false);
   const counterRef = useRef(0);
+  // What the run on screen was sent with, so a retry asks for the same thing even
+  // if the form has changed since. Gone after a reload — the form is used then.
+  const snapshotRef = useRef(null);
 
   // The run itself — its cards, their persistence, recovering an unfinished run
   // when the tab is reopened, the history of past runs, the tab title and the
@@ -159,6 +178,81 @@ export default function BatchVideoStudio() {
     const option = field.options.find((o) => String(o.value) === rawValue);
     if (!option) return;
     setOptionValues((prev) => ({ ...prev, [field.key]: option.value }));
+  }
+
+  async function runItem(item, snapshot, key) {
+    if (cancelRef.current) {
+      gen.updateItem(item.id, { status: 'failed', error: 'Cancelled before it started.' });
+      return false;
+    }
+    gen.updateItem(item.id, { status: 'running', error: null });
+    try {
+      const input = buildVideoInput(snapshot.cfg, {
+        prompt: item.prompt,
+        optionValues: snapshot.optionValues,
+        startFrameDataUri: item.startFrame,
+      });
+      const prediction = await createPrediction(snapshot.modelId, input, key);
+      // Storing the prediction id is what makes the card recoverable: the run
+      // is persisted on every change, so a closed tab (or a reload during a
+      // long render) can pick it back up.
+      gen.updateItem(item.id, { predictionId: prediction.id });
+      const finalData = await pollPrediction(
+        prediction.id,
+        key,
+        () => cancelRef.current,
+        VIDEO_POLL
+      );
+      const outputUrl = extractOutputUrl(finalData.output);
+      if (!outputUrl) throw new Error('No video returned by the model.');
+      gen.updateItem(item.id, { status: 'succeeded', outputUrl });
+      return true;
+    } catch (err) {
+      gen.updateItem(item.id, { status: 'failed', error: friendlyErrorMessage(err) });
+      return false;
+    }
+  }
+
+  // Generate one failed card again, in place, with the settings its run used.
+  async function retryItem(item) {
+    if (busy) return;
+    const key = apiKey.trim();
+    if (!key) {
+      setRunHint({ text: 'Add your Replicate API token first.', isError: true });
+      setKeyModalOpen(true);
+      return;
+    }
+    const snapshot = snapshotRef.current || {
+      modelId: modelKey,
+      cfg,
+      optionValues: { ...optionValues },
+    };
+    // Start frames are held in memory only, so after a reload an item no longer
+    // has its own. The shared one stands in for it — but not for a per-frame
+    // batch, where each video had a different image.
+    let startFrame = item.startFrame;
+    if (!startFrame && !snapshotRef.current && byPrompts) startFrame = sharedFrame?.dataUri || null;
+    if (!startFrame && snapshot.cfg.requiresImage) {
+      setRunHint({
+        text: 'Its start frame is gone with the old tab — run the batch again to regenerate it.',
+        isError: true,
+      });
+      return;
+    }
+    setRunHint({ text: '', isError: false });
+    cancelRef.current = false;
+    setIsRunning(true);
+    // The run may already be in history; take it back so the retry lands in it.
+    gen.continueRun();
+    gen.updateItem(item.id, { predictionId: null, outputUrl: null });
+    const ok = await runItem({ ...item, startFrame }, snapshot, key);
+    setIsRunning(false);
+    gen.finishRun();
+    setRunHint(
+      ok
+        ? { text: 'Retried video generated.', isError: false }
+        : { text: 'Retry failed — the card says why.', isError: true }
+    );
   }
 
   async function handleGenerate() {
@@ -211,40 +305,8 @@ export default function BatchVideoStudio() {
     });
 
     // The settings can change while the batch runs — freeze what it sends.
-    const snapshot = { modelId: modelKey, cfg, optionValues: { ...optionValues } };
-
-    async function runOne(item) {
-      if (cancelRef.current) {
-        gen.updateItem(item.id, { status: 'failed', error: 'Cancelled before it started.' });
-        return false;
-      }
-      gen.updateItem(item.id, { status: 'running' });
-      try {
-        const input = buildVideoInput(snapshot.cfg, {
-          prompt: item.prompt,
-          optionValues: snapshot.optionValues,
-          startFrameDataUri: item.startFrame,
-        });
-        const prediction = await createPrediction(snapshot.modelId, input, key);
-        // Storing the prediction id is what makes the card recoverable: the run
-        // is persisted on every change, so a closed tab (or a reload during a
-        // long render) can pick it back up.
-        gen.updateItem(item.id, { predictionId: prediction.id });
-        const finalData = await pollPrediction(
-          prediction.id,
-          key,
-          () => cancelRef.current,
-          VIDEO_POLL
-        );
-        const outputUrl = extractOutputUrl(finalData.output);
-        if (!outputUrl) throw new Error('No video returned by the model.');
-        gen.updateItem(item.id, { status: 'succeeded', outputUrl });
-        return true;
-      } catch (err) {
-        gen.updateItem(item.id, { status: 'failed', error: friendlyErrorMessage(err) });
-        return false;
-      }
-    }
+    snapshotRef.current = { modelId: modelKey, cfg, optionValues: { ...optionValues } };
+    const runOne = (item) => runItem(item, snapshotRef.current, key);
 
     let cursor = 0;
     let done = 0;
@@ -499,7 +561,13 @@ export default function BatchVideoStudio() {
           ) : (
             <div className="grid grid-cols-[repeat(auto-fill,minmax(290px,1fr))] gap-3.5 mt-1">
               {gen.items.map((r) => (
-                <ResultCard key={r.id} result={r} cacheKey={gen.outputKey(r)} />
+                <ResultCard
+                  key={r.id}
+                  result={r}
+                  cacheKey={gen.outputKey(r)}
+                  busy={busy}
+                  onRetry={retryItem}
+                />
               ))}
             </div>
           )}
