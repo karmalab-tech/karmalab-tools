@@ -3,12 +3,23 @@ import { Panel } from './Panel.jsx';
 import { Button } from './Button.jsx';
 import { StatusPill } from './StatusPill.jsx';
 import { FIELD_HELP } from '../fields.js';
+import { historyToolLabel } from '../historyTools.js';
 import { formatRunTime, runCounts, runStatus, runSummary } from '../runs.js';
 
-// The history of finished generations, shared by the generation tools. Runs come
-// from localStorage (see src/shared/runs.js), newest first; picking one loads it
-// back into the tool, which then refreshes each item's status from Replicate.
-export function RunHistoryModal({ open, runs, currentRunId, onSelect, onClose, onClear }) {
+// The history of finished generations, shared by the generation tools: one list
+// for every tool, each run labelled with the tool that made it. Runs come from
+// localStorage (see src/shared/runs.js), newest first; picking one loads it back
+// into its tool — opening that tool first if it is another one — which then
+// refreshes each item's status from Replicate.
+export function RunHistoryModal({
+  open,
+  runs,
+  currentRunId,
+  currentTool,
+  onSelect,
+  onClose,
+  onClear,
+}) {
   useEffect(() => {
     if (!open) return;
     const onKey = (e) => e.key === 'Escape' && onClose();
@@ -36,12 +47,12 @@ export function RunHistoryModal({ open, runs, currentRunId, onSelect, onClose, o
           <div className="flex flex-col gap-2">
             {runs.map((r) => {
               const counts = runCounts(r.items);
-              const isCurrent = r.id === currentRunId;
+              const isCurrent = r.id === currentRunId && r.tool === currentTool;
               return (
                 <button
                   key={r.id}
                   type="button"
-                  onClick={() => onSelect(r.id)}
+                  onClick={() => onSelect(r.id, r.tool)}
                   className={`text-left rounded-[14px] border p-3.5 cursor-pointer transition-colors duration-150 ${
                     isCurrent
                       ? 'border-accent bg-accent-dim'
@@ -53,7 +64,7 @@ export function RunHistoryModal({ open, runs, currentRunId, onSelect, onClose, o
                     <StatusPill status={runStatus(r.items)} className="shrink-0" />
                   </div>
                   <div className="font-mono text-[11.5px] text-text-dim">
-                    {formatRunTime(r.finishedAt || r.createdAt)} ·{' '}
+                    {historyToolLabel(r.tool)} · {formatRunTime(r.finishedAt || r.createdAt)} ·{' '}
                     {counts.total === 1 ? '1 item' : `${counts.total} items`} ·{' '}
                     {runSummary(r.items)}
                   </div>
@@ -71,7 +82,8 @@ export function RunHistoryModal({ open, runs, currentRunId, onSelect, onClose, o
         <div className={`${FIELD_HELP} mt-4`}>
           Kept in this browser only, results included: Replicate deletes those an hour after they
           are made, so what you see and download from an older generation is the copy this browser
-          saved. Clearing the history deletes those copies too.
+          saved. Every tool's generations are listed here; one from another tool opens in that tool.
+          Clearing the history deletes the whole list, and those copies, for all of them.
         </div>
         <div className="flex gap-2 mt-4">
           {runs.length > 0 && (

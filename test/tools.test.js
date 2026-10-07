@@ -11,6 +11,7 @@ import { buildVideoInput } from '../src/shared/videoModels.js';
 import { loadKey, saveKey, storage } from '../src/apps/batch/storage.js';
 import { HISTORY_LIMIT, createToolStorage } from '../src/shared/storage.js';
 import { TOOLS, toolLabel } from '../src/shared/tools.js';
+import { HISTORY_TOOLS, historyRunUrl, parseHistoryHash } from '../src/shared/historyTools.js';
 import {
   MAX_BYTES,
   cacheKey,
@@ -629,7 +630,90 @@ describe('createToolStorage namespacing', () => {
     expect(images.loadHistory().map((r) => r.id)).toEqual(['img-run']);
     // Archiving one tool's run must leave the other's alone.
     expect(videos.loadCurrentRun().id).toBe('vid-run');
-    expect(videos.loadHistory()).toEqual([]);
+  });
+});
+
+describe('the history shared across tools', () => {
+  let store;
+  const images = () => createToolStorage('batchImageStudio');
+  const videos = () => createToolStorage('batchVideoStudio');
+  beforeEach(() => {
+    store = stubLocalStorage();
+  });
+
+  it('lists every tool’s runs in one list, each tagged with its tool', () => {
+    images().archiveRun(run({ id: 'img-run' }));
+    videos().archiveRun(run({ id: 'vid-run' }));
+    const seen = images().loadHistory();
+    expect(seen.map((r) => [r.tool, r.id])).toEqual([
+      ['batchVideoStudio', 'vid-run'],
+      ['batchImageStudio', 'img-run'],
+    ]);
+    expect(videos().loadHistory()).toEqual(seen);
+  });
+
+  it('only updates and removes its own tool’s run when ids collide', () => {
+    images().archiveRun(run({ id: 'same', title: 'image run' }));
+    videos().archiveRun(run({ id: 'same', title: 'video run' }));
+    images().updateHistoryRun(run({ id: 'same', title: 'image run, refreshed' }));
+    images().removeHistoryRun('same');
+    const left = videos().loadHistory();
+    expect(left.map((r) => [r.tool, r.title])).toEqual([['batchVideoStudio', 'video run']]);
+  });
+
+  it('caps each tool on its own, so a busy tool cannot push the others off', () => {
+    videos().archiveRun(run({ id: 'vid-run' }));
+    for (let i = 0; i < HISTORY_LIMIT + 5; i++) images().archiveRun(run({ id: `img-${i}` }));
+    const history = images().loadHistory();
+    expect(history.filter((r) => r.tool === 'batchImageStudio')).toHaveLength(HISTORY_LIMIT);
+    expect(history.some((r) => r.id === 'vid-run')).toBe(true);
+  });
+
+  it('clearing it clears it for every tool', () => {
+    images().archiveRun(run({ id: 'img-run' }));
+    videos().archiveRun(run({ id: 'vid-run' }));
+    images().clearHistory();
+    expect(videos().loadHistory()).toEqual([]);
+  });
+
+  it('folds each tool’s old separate history into the shared one, once', () => {
+    store.set(
+      'karmalab.batchImageStudio.runHistory',
+      JSON.stringify([run({ id: 'old-img', finishedAt: 2000 })])
+    );
+    store.set(
+      'karmalab.batchVideoStudio.runHistory',
+      JSON.stringify([run({ id: 'old-vid', finishedAt: 3000 })])
+    );
+    // Opened from a third tool, the others' old lists still come across.
+    const seen = createToolStorage('imageChainStudio').loadHistory();
+    expect(seen.map((r) => [r.tool, r.id])).toEqual([
+      ['batchVideoStudio', 'old-vid'],
+      ['batchImageStudio', 'old-img'],
+    ]);
+    expect(store.has('karmalab.batchImageStudio.runHistory')).toBe(false);
+    expect(store.has('karmalab.batchVideoStudio.runHistory')).toBe(false);
+    expect(images().loadHistory()).toHaveLength(2);
+  });
+});
+
+describe('opening a run from another tool', () => {
+  it('points at that tool’s page with the run in the hash', () => {
+    expect(historyRunUrl('imageChainStudio', 'run-1')).toBe('/image-chain#history=run-1');
+    expect(historyRunUrl('nope', 'run-1')).toBe('');
+  });
+
+  it('reads the run id back, encoded or not, and ignores other hashes', () => {
+    expect(parseHistoryHash('#history=run%20a%2Fb')).toBe('run a/b');
+    expect(parseHistoryHash('#history=run-1')).toBe('run-1');
+    expect(parseHistoryHash('#other')).toBe('');
+    expect(parseHistoryHash('')).toBe('');
+    expect(parseHistoryHash('#history=%E0%A4%A')).toBe('');
+  });
+
+  it('only names pages that are real routes', () => {
+    const paths = routes.map((r) => r.path);
+    Object.values(HISTORY_TOOLS).forEach((t) => expect(paths).toContain(t.path));
   });
 });
 
