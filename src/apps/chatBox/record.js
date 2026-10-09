@@ -74,11 +74,15 @@ async function pickTracks(width, height, fps, bitrate, wantsAudio) {
 export async function recordChatBox({
   width,
   height,
+  design,
+  layoutWidth,
   boxWidthPct,
   background,
   headline,
   placeholder,
   modelChip,
+  // URL of the app icon to show at the top of the frame, or none.
+  appIconUrl = null,
   attachments = [],
   // Decoded typing clips at AUDIO_SAMPLE_RATE (sequences.js), or none for a
   // silent recording. One is picked at random per burst of typing.
@@ -90,8 +94,11 @@ export async function recordChatBox({
   if (!videoSupport()) throw new Error('This browser cannot encode video.');
 
   onProgress({ stage: 'preparing', done: 0, total: plan.frameCount });
-  await ensureFonts();
+  await ensureFonts(design);
   const images = await decodeAttachments(attachments);
+  const appIcon = appIconUrl
+    ? (await decodeAttachments([{ dataUri: appIconUrl }]))[0] || null
+    : null;
 
   const canvas = document.createElement('canvas');
   canvas.width = width;
@@ -101,12 +108,15 @@ export async function recordChatBox({
   const scene = buildScene(ctx, {
     width,
     height,
+    design,
+    layoutWidth,
     boxWidthPct,
     background,
     headline,
     placeholder,
     modelChip,
     attachments: images,
+    appIcon,
     finalText: plan.chars.join(''),
   });
 

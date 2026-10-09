@@ -24,12 +24,17 @@ import { cachedBlob } from '../shared/outputCache.js';
 import { useCachedOutput } from '../shared/useCachedOutput.js';
 import { useGenerationRun } from '../shared/useGenerationRun.js';
 import { ChatBox } from './chatBox/ChatBox.jsx';
+import { appIconFor } from './chatBox/appIcons.js';
 import {
   DEFAULT_HEADLINE,
   DEFAULT_LAYOUT_WIDTH,
+  DESIGNS,
+  DESIGN_IDS,
   DEFAULT_MODEL_CHIP,
   DEFAULT_PLACEHOLDER,
   LAYOUT_WIDTH_LIMITS,
+  normalizeDesign,
+  resolveDesign,
 } from './chatBox/design.js';
 import {
   BOX_WIDTH_LIMITS,
@@ -75,6 +80,8 @@ import { loadKey, saveKey, storage } from './chatBox/storage.js';
 // back framed. Attachments are not: image data URIs have no business in
 // localStorage (see src/shared/runs.js).
 const SETTING_KEYS = [
+  'design',
+  'showIcon',
   'text',
   'width',
   'height',
@@ -97,6 +104,8 @@ const SETTING_KEYS = [
 ];
 
 const INITIAL = {
+  design: 'karma',
+  showIcon: '0',
   text: 'Make me a video of a golden retriever surfing at sunset',
   width: '1080',
   height: '1920',
@@ -410,6 +419,17 @@ export default function ChatBoxStudio() {
     saveKey(key, value);
   }
 
+  // A design brings its own backdrop (Claude's is warm grey, ChatGPT's black),
+  // so picking one sets the background too — it stays editable after.
+  function chooseDesign(id) {
+    set('design', id);
+    set('background', resolveDesign(id).colors.bg);
+  }
+
+  const design = normalizeDesign(settings.design);
+  // Off unless asked for, and only for a design that has an icon to show.
+  const iconUrl = settings.showIcon === '1' ? appIconFor(design) : null;
+
   const soundChoice = normalizeChoice(settings.soundChoice);
   // What the recording will be laid over: the built-in sequences, one clip of
   // your own, or nothing at all.
@@ -673,12 +693,14 @@ export default function ChatBoxStudio() {
       const result = await recordChatBox({
         width,
         height,
+        design,
         layoutWidth,
         boxWidthPct,
         background: settings.background,
         headline: settings.headline,
         placeholder: settings.placeholder,
         modelChip: settings.modelChip,
+        appIconUrl: iconUrl,
         attachments,
         clips,
         plan,
@@ -742,6 +764,19 @@ export default function ChatBoxStudio() {
                 background: settings.background,
               }}
             >
+              {iconUrl && (
+                <img
+                  src={iconUrl}
+                  alt=""
+                  className="absolute left-1/2 block"
+                  style={{
+                    width: resolveDesign(design).metrics.appIconSize * boxScale,
+                    height: resolveDesign(design).metrics.appIconSize * boxScale,
+                    top: resolveDesign(design).metrics.appIconTop * boxScale,
+                    transform: 'translateX(-50%)',
+                  }}
+                />
+              )}
               <div
                 className="absolute left-1/2 top-1/2"
                 style={{
@@ -758,6 +793,7 @@ export default function ChatBoxStudio() {
                   placeholder={settings.placeholder}
                   modelChip={settings.modelChip}
                   headline={settings.headline}
+                  design={design}
                   sending={!!preview?.sending}
                   readOnly={!!preview || recording}
                 />
@@ -902,6 +938,48 @@ export default function ChatBoxStudio() {
         </Panel>
 
         <Panel title="The box">
+          <div className={FIELD}>
+            <label className={LABEL} htmlFor="designSelect">
+              Design
+            </label>
+            <select
+              id="designSelect"
+              className={SELECT}
+              style={SELECT_CHEVRON}
+              value={design}
+              onChange={(e) => chooseDesign(e.target.value)}
+              disabled={recording}
+            >
+              {DESIGN_IDS.map((id) => (
+                <option key={id} value={id}>
+                  {DESIGNS[id].label}
+                </option>
+              ))}
+            </select>
+            <div className={FIELD_HELP}>
+              Claude and ChatGPT borrow their colours, type and shape — the box keeps its own
+              elements. Picking one also sets the background.
+            </div>
+          </div>
+          <div className={FIELD}>
+            <label
+              className={`flex items-center gap-2.5 text-[13.5px] ${
+                appIconFor(design) ? 'cursor-pointer' : 'opacity-50'
+              }`}
+            >
+              <input
+                type="checkbox"
+                className="accent-accent w-4 h-4"
+                checked={settings.showIcon === '1'}
+                disabled={recording || !appIconFor(design)}
+                onChange={(e) => set('showIcon', e.target.checked ? '1' : '0')}
+              />
+              Show the app icon at the top
+            </label>
+            {!appIconFor(design) && (
+              <div className={FIELD_HELP}>KarmaLab has no icon — pick Claude or ChatGPT.</div>
+            )}
+          </div>
           <div className={FIELD}>
             <label className={LABEL} htmlFor="headlineInput">
               Title above the box

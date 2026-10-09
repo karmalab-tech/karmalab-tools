@@ -1,6 +1,12 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Spinner } from '../../shared/components';
-import { DEFAULT_MODEL_CHIP, DEFAULT_PLACEHOLDER, ICONS, METRICS } from './design.js';
+import {
+  DEFAULT_MODEL_CHIP,
+  DEFAULT_PLACEHOLDER,
+  ICONS,
+  METRICS,
+  resolveDesign,
+} from './design.js';
 
 // The chat box itself: the thing the studio records.
 //
@@ -15,6 +21,11 @@ import { DEFAULT_MODEL_CHIP, DEFAULT_PLACEHOLDER, ICONS, METRICS } from './desig
 // hardcoded pixel values out of this file.
 //
 // To restyle the box: change design.js. The box and the video both follow.
+//
+// The same goes for which design it wears (KarmaLab, Claude, ChatGPT): the
+// colours reach the markup as CSS variables on the root, set from the design, so
+// the classes stay Tailwind utilities (`bg-(--cb-panel)`) and a palette lives in
+// design.js and nowhere else.
 //
 // Images are attached by dropping them on the box, by the paperclip, or by
 // pasting: each one becomes a rounded square in a strip above the text, the way
@@ -54,10 +65,32 @@ export async function readImageFiles(fileList) {
   return (await Promise.all(files.map(readFile))).filter(Boolean);
 }
 
-// METRICS, arranged as the style objects the markup needs.
-const styles = (m) => ({
-  headline: { fontSize: m.headlineFontSize, marginBottom: m.headlineGap },
+// The design's palette as the custom properties the markup's classes read.
+const cssVars = (c) => ({
+  '--cb-panel': c.panel,
+  '--cb-border': c.panelBorder,
+  '--cb-text': c.text,
+  '--cb-dim': c.dim,
+  '--cb-accent': c.accent,
+  '--cb-accent-dim': c.accentDim,
+  '--cb-send-off-bg': c.sendOffBg,
+  '--cb-send-off-fg': c.sendOffFg,
+  '--cb-send-fg': c.sendOnFg,
+  '--cb-control-border': c.controlBorder,
+  '--cb-control-hover': c.controlHover,
+  '--cb-thumb-bg': c.thumbBg,
+  '--cb-thumb-border': c.thumbBorder,
+});
+
+// The design's metrics and fonts, arranged as the style objects the markup needs.
+const styles = ({ metrics: m, fonts, colors }) => ({
+  headline: {
+    fontSize: m.headlineFontSize,
+    marginBottom: m.headlineGap,
+    fontFamily: fonts.headline,
+  },
   box: {
+    boxShadow: `0 ${m.shadowOffsetY}px ${m.shadowBlur}px ${colors.shadow}`,
     borderRadius: m.radius,
     paddingTop: m.padTop,
     paddingRight: m.padRight,
@@ -72,9 +105,10 @@ const styles = (m) => ({
     lineHeight: `${m.lineHeight}px`,
     minHeight: m.minTextHeight,
     maxHeight: m.maxTextLines * m.lineHeight,
+    fontFamily: fonts.text,
   },
   controls: { gap: m.chipGap },
-  pill: { height: m.control, borderRadius: m.pillRadius, gap: m.pillGap },
+  pill: { height: m.control, borderRadius: m.pillRadius, gap: m.pillGap, fontFamily: fonts.chip },
   pillIdle: { width: m.control },
   pillActive: { paddingLeft: m.pillPadLeft, paddingRight: m.pillPadRight },
   chip: {
@@ -84,9 +118,10 @@ const styles = (m) => ({
     paddingRight: m.chipPadX,
     fontSize: m.chipFontSize,
     gap: m.pillGap,
+    fontFamily: fonts.chip,
   },
-  send: { width: m.control, height: m.control },
-  overlay: { borderRadius: m.radius, fontSize: m.chipFontSize },
+  send: { width: m.control, height: m.control, borderRadius: m.sendRadius },
+  overlay: { borderRadius: m.radius, fontSize: m.chipFontSize, fontFamily: fonts.chip },
 });
 
 export function ChatBox({
@@ -98,6 +133,7 @@ export function ChatBox({
   placeholder = DEFAULT_PLACEHOLDER,
   modelChip = DEFAULT_MODEL_CHIP,
   headline = '',
+  design = 'karma',
   sending = false,
   readOnly = false,
   onSubmit,
@@ -108,7 +144,9 @@ export function ChatBox({
   // dragenter/dragleave fire for every child the pointer crosses; counting them
   // is what keeps the highlight from flickering on the way in.
   const dragDepth = useRef(0);
-  const s = useMemo(() => styles(METRICS), []);
+  const resolved = useMemo(() => resolveDesign(design), [design]);
+  const s = useMemo(() => styles(resolved), [resolved]);
+  const vars = useMemo(() => cssVars(resolved.colors), [resolved]);
 
   // Grow with the text, up to the height the composer scrolls at.
   useEffect(() => {
@@ -137,10 +175,10 @@ export function ChatBox({
   const canSend = text.trim().length > 0 || attached;
 
   return (
-    <div className="w-full flex flex-col items-center">
+    <div className="w-full flex flex-col items-center" style={vars}>
       {headline && (
         <h1
-          className="font-normal text-white text-center tracking-[-0.01em] m-0"
+          className="font-normal text-(color:--cb-text) text-center tracking-[-0.01em] m-0"
           style={s.headline}
         >
           {headline}
@@ -152,10 +190,11 @@ export function ChatBox({
         data-testid="chat-box"
         style={s.box}
         className={[
-          'relative w-full bg-panel border flex flex-col',
-          'shadow-[0_8px_40px_rgba(0,0,0,0.45)]',
+          'relative w-full border flex flex-col',
           'transition-[border-color,background-color] duration-150',
-          dragging ? 'border-accent bg-accent-dim' : 'border-panel-border',
+          dragging
+            ? 'border-(color:--cb-accent) bg-(--cb-accent-dim)'
+            : 'border-(color:--cb-border) bg-(--cb-panel)',
         ].join(' ')}
         onDragEnter={(e) => {
           e.preventDefault();
@@ -190,14 +229,14 @@ export function ChatBox({
                   alt=""
                   title={a.name}
                   style={s.thumb}
-                  className="object-cover block bg-black border border-[#3a3a3a]"
+                  className="object-cover block bg-(--cb-thumb-bg) border border-(color:--cb-thumb-border)"
                 />
                 {!readOnly && (
                   <button
                     type="button"
                     title={`Remove ${a.name}`}
                     onClick={() => remove(a.id)}
-                    className="absolute -top-1.5 -right-1.5 w-5 h-5 rounded-full bg-panel border border-panel-border text-text-dim flex items-center justify-center cursor-pointer opacity-0 group-hover:opacity-100 transition-opacity duration-150 hover:border-error hover:text-error"
+                    className="absolute -top-1.5 -right-1.5 w-5 h-5 rounded-full bg-(--cb-panel) border border-(color:--cb-border) text-(color:--cb-dim) flex items-center justify-center cursor-pointer opacity-0 group-hover:opacity-100 transition-opacity duration-150 hover:border-error hover:text-error"
                   >
                     <Icon d={ICONS.close} size={10} width={2.4} />
                   </button>
@@ -214,7 +253,7 @@ export function ChatBox({
           readOnly={readOnly}
           placeholder={placeholder}
           style={s.text}
-          className="w-full bg-transparent border-none outline-none resize-none text-text font-sans font-normal p-0 placeholder:text-text-dim"
+          className="w-full bg-transparent border-none outline-none resize-none text-(color:--cb-text) font-normal p-0 placeholder:text-(color:--cb-dim)"
           onChange={(e) => onTextChange?.(e.target.value)}
           onKeyDown={(e) => {
             if (e.key === 'Enter' && !e.shiftKey) {
@@ -234,11 +273,11 @@ export function ChatBox({
               onClick={() => !readOnly && fileRef.current?.click()}
               style={{ ...s.pill, ...(attached ? s.pillActive : s.pillIdle) }}
               className={[
-                'flex items-center justify-center cursor-pointer font-mono border shrink-0',
+                'flex items-center justify-center cursor-pointer border shrink-0',
                 'transition-[border-color,color,background] duration-150 [&>svg]:shrink-0',
                 attached
-                  ? 'border-accent bg-accent-dim text-accent'
-                  : 'border-panel-border bg-transparent text-text-dim hover:border-[#4a4a4a] hover:text-text',
+                  ? 'border-(color:--cb-accent) bg-(--cb-accent-dim) text-(color:--cb-accent)'
+                  : 'border-(color:--cb-control-border) bg-transparent text-(color:--cb-dim) hover:border-(color:--cb-control-hover) hover:text-(color:--cb-text)',
               ].join(' ')}
             >
               {attached ? (
@@ -255,7 +294,7 @@ export function ChatBox({
               <button
                 type="button"
                 style={s.chip}
-                className="font-mono text-text-dim border border-panel-border bg-transparent flex items-center cursor-pointer shrink-0"
+                className="text-(color:--cb-dim) border border-(color:--cb-control-border) bg-transparent flex items-center cursor-pointer shrink-0"
               >
                 {modelChip}
                 <Icon d={ICONS.chevron} size={10} width={2.4} />
@@ -270,15 +309,22 @@ export function ChatBox({
             onClick={() => canSend && onSubmit?.()}
             style={s.send}
             className={[
-              'flex items-center justify-center rounded-full shrink-0',
+              'flex items-center justify-center shrink-0',
               'transition-[transform,opacity,background] duration-150',
               canSend
-                ? 'bg-accent text-black cursor-pointer hover:scale-105'
-                : 'bg-[#3a3a3a] text-[#6a6a6a] cursor-default',
+                ? 'bg-(--cb-accent) text-(color:--cb-send-fg) cursor-pointer hover:scale-105'
+                : 'bg-(--cb-send-off-bg) text-(color:--cb-send-off-fg) cursor-default',
             ].join(' ')}
           >
             {sending ? (
-              <Spinner size={METRICS.sendIconSize} variant="dark" />
+              <Spinner
+                size={METRICS.sendIconSize}
+                variant="dark"
+                style={{
+                  borderColor: 'color-mix(in srgb, currentColor 25%, transparent)',
+                  borderTopColor: 'currentColor',
+                }}
+              />
             ) : (
               <Icon d={ICONS.arrowUp} size={METRICS.sendIconSize} width={2.5} />
             )}
@@ -288,7 +334,7 @@ export function ChatBox({
         {dragging && (
           <div
             style={s.overlay}
-            className="absolute inset-0 border-[1.5px] border-dashed border-accent bg-black/45 flex items-center justify-center pointer-events-none font-mono text-accent"
+            className="absolute inset-0 border-[1.5px] border-dashed border-(color:--cb-accent) bg-black/45 flex items-center justify-center pointer-events-none text-(color:--cb-accent)"
           >
             Drop to attach
           </div>
