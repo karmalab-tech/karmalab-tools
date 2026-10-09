@@ -19,15 +19,7 @@
 // layout, the line wrapping) are exported separately and unit-tested, and the
 // picture is checked by looking at it.
 
-import {
-  COLORS,
-  DEFAULT_LAYOUT_WIDTH,
-  FONT_MONO,
-  FONT_SANS,
-  FONT_SPECS,
-  ICONS,
-  METRICS,
-} from './design.js';
+import { DEFAULT_LAYOUT_WIDTH, ICONS, resolveDesign } from './design.js';
 
 // The shapes a reel, a post or a YouTube still is cut to. Anything else is
 // typed in by hand.
@@ -77,10 +69,10 @@ export const extensionForType = (type) => (String(type || '').includes('webm') ?
 // Load the fonts the canvas is about to ask for. A canvas silently falls back
 // to a system font for anything the document hasn't loaded yet, and a video
 // that shipped in Arial is not obviously wrong until it is next to the app.
-export async function ensureFonts() {
+export async function ensureFonts(designId) {
   if (typeof document === 'undefined' || !document.fonts) return;
   try {
-    await Promise.all(FONT_SPECS.map((spec) => document.fonts.load(spec)));
+    await Promise.all(resolveDesign(designId).fontSpecs.map((spec) => document.fonts.load(spec)));
     await document.fonts.ready;
   } catch {
     /* no font loading API, or a face that will not load — paint anyway */
@@ -147,9 +139,10 @@ export function buildScene(ctx, options) {
   const {
     width,
     height,
+    design: designId,
     layoutWidth = DEFAULT_LAYOUT_WIDTH,
     boxWidthPct = DEFAULT_BOX_WIDTH_PCT,
-    background = COLORS.bg,
+    background,
     headline = '',
     placeholder = '',
     modelChip = '',
@@ -157,8 +150,10 @@ export function buildScene(ctx, options) {
     finalText = '',
   } = options;
 
+  const design = resolveDesign(designId);
+  const { colors, fonts } = design;
   const scale = sceneScale(width, layoutWidth);
-  const m = Object.fromEntries(Object.entries(METRICS).map(([k, v]) => [k, v * scale]));
+  const m = Object.fromEntries(Object.entries(design.metrics).map(([k, v]) => [k, v * scale]));
   const boxW = boxCssWidth(layoutWidth, boxWidthPct) * scale;
   const boxX = Math.round((width - boxW) / 2);
   const innerW = boxW - m.padLeft - m.padRight;
@@ -168,17 +163,21 @@ export function buildScene(ctx, options) {
     height,
     scale,
     m,
+    design,
+    colors,
+    // `maxTextLines` is a count, not a length — the scale does not touch it.
+    maxTextLines: design.metrics.maxTextLines,
     boxX,
     boxW,
     innerW,
-    background,
+    background: background || colors.bg,
     headline,
     placeholder,
     modelChip,
     attachments,
-    fontText: `${m.fontSize}px ${FONT_SANS}`,
-    fontChip: `${m.chipFontSize}px ${FONT_MONO}`,
-    fontHeadline: `${m.headlineFontSize}px ${FONT_SANS}`,
+    fontText: `${m.fontSize}px ${fonts.text}`,
+    fontChip: `${m.chipFontSize}px ${fonts.chip}`,
+    fontHeadline: `${m.headlineFontSize}px ${fonts.headline}`,
   };
 
   // The box at its tallest — the finished message — is what the composition is
@@ -201,7 +200,7 @@ export function buildScene(ctx, options) {
 export function textLines(ctx, scene, text) {
   ctx.font = scene.fontText;
   const lines = text ? wrapText(ctx, text, scene.innerW) : [''];
-  return lines.slice(-METRICS.maxTextLines);
+  return lines.slice(-scene.maxTextLines);
 }
 
 // How many thumbnails fit across the box, and how tall the strip of them is.
@@ -226,7 +225,7 @@ export function boxHeight(ctx, scene, text, attachCount = scene.attachments.leng
 // One frame. `state` is what timeline.js says the box looks like right now:
 // { text, caretOn, sending, attachCount, dropProgress }.
 export function paintFrame(ctx, scene, state) {
-  const { m, width, height, boxX, boxW } = scene;
+  const { m, colors, width, height, boxX, boxW } = scene;
   const attachCount =
     state.attachCount === undefined ? scene.attachments.length : state.attachCount;
   // 0 while an image is still landing, 1 once it has settled.
@@ -238,7 +237,7 @@ export function paintFrame(ctx, scene, state) {
 
   if (scene.headline) {
     ctx.font = scene.fontHeadline;
-    ctx.fillStyle = COLORS.text;
+    ctx.fillStyle = colors.text;
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
     ctx.fillText(scene.headline, width / 2, scene.headlineTop + scene.headlineH / 2);
@@ -250,14 +249,14 @@ export function paintFrame(ctx, scene, state) {
   // The panel: fill with the shadow the DOM box wears, then the border on top
   // (the shadow is turned off first, or the stroke would cast one too).
   ctx.save();
-  ctx.shadowColor = COLORS.shadow;
+  ctx.shadowColor = colors.shadow;
   ctx.shadowBlur = m.shadowBlur;
   ctx.shadowOffsetY = m.shadowOffsetY;
-  ctx.fillStyle = COLORS.panel;
+  ctx.fillStyle = colors.panel;
   roundRect(ctx, boxX, boxY, boxW, boxH, m.radius);
   ctx.fill();
   ctx.restore();
-  ctx.strokeStyle = COLORS.panelBorder;
+  ctx.strokeStyle = colors.panelBorder;
   ctx.lineWidth = Math.max(1, scene.scale);
   roundRect(ctx, boxX, boxY, boxW, boxH, m.radius);
   ctx.stroke();
@@ -267,7 +266,7 @@ export function paintFrame(ctx, scene, state) {
   if (landed < 1 && attachCount > 0) {
     ctx.save();
     ctx.globalAlpha = 1 - landed;
-    ctx.strokeStyle = COLORS.accent;
+    ctx.strokeStyle = colors.accent;
     ctx.lineWidth = Math.max(1.5, scene.scale * 1.5);
     roundRect(ctx, boxX, boxY, boxW, boxH, m.radius);
     ctx.stroke();
@@ -284,7 +283,7 @@ export function paintFrame(ctx, scene, state) {
       const row = Math.floor(i / perRow) * (m.thumb + m.thumbGap);
       // The newest one scales and fades into place; the rest are settled.
       const progress = i === attachCount - 1 ? landed : 1;
-      drawThumb(ctx, image, x, y + row, m.thumb, m.thumbRadius, scene.scale, progress);
+      drawThumb(ctx, colors, image, x, y + row, m.thumb, m.thumbRadius, scene.scale, progress);
     });
     y += stripHeight(scene, attachCount);
   }
@@ -295,7 +294,7 @@ export function paintFrame(ctx, scene, state) {
   ctx.font = scene.fontText;
   ctx.textAlign = 'left';
   ctx.textBaseline = 'middle';
-  ctx.fillStyle = state.text ? COLORS.text : COLORS.dim;
+  ctx.fillStyle = state.text ? colors.text : colors.dim;
   const shown = state.text ? lines : [scene.placeholder];
   shown.forEach((line, i) => {
     ctx.fillText(line, contentX, y + i * m.lineHeight + m.lineHeight / 2);
@@ -305,7 +304,7 @@ export function paintFrame(ctx, scene, state) {
     const lastIndex = state.text ? lines.length - 1 : 0;
     const caretX = contentX + (state.text ? ctx.measureText(lines[lastIndex]).width : 0);
     const caretH = m.fontSize * 1.15;
-    ctx.fillStyle = COLORS.text;
+    ctx.fillStyle = colors.text;
     ctx.fillRect(
       caretX + m.caretWidth,
       y + lastIndex * m.lineHeight + (m.lineHeight - caretH) / 2,
@@ -326,7 +325,7 @@ export function paintFrame(ctx, scene, state) {
 // One attachment. `progress` is its landing: below 1 it is drawn slightly
 // small and see-through, about its own centre, so it settles into the strip
 // instead of appearing from nowhere.
-function drawThumb(ctx, image, x, y, size, radius, scale, progress = 1) {
+function drawThumb(ctx, colors, image, x, y, size, radius, scale, progress = 1) {
   const eased = progress >= 1 ? 1 : 1 - (1 - progress) * (1 - progress);
   ctx.save();
   if (eased < 1) {
@@ -338,7 +337,7 @@ function drawThumb(ctx, image, x, y, size, radius, scale, progress = 1) {
   }
   ctx.save();
   roundRect(ctx, x, y, size, size, radius);
-  ctx.fillStyle = COLORS.thumbBg;
+  ctx.fillStyle = colors.thumbBg;
   ctx.fill();
   ctx.clip();
   // Cover, like the DOM's object-cover: fill the square, crop the overflow.
@@ -347,7 +346,7 @@ function drawThumb(ctx, image, x, y, size, radius, scale, progress = 1) {
   const h = image.height * cover;
   ctx.drawImage(image, x + (size - w) / 2, y + (size - h) / 2, w, h);
   ctx.restore();
-  ctx.strokeStyle = COLORS.thumbBorder;
+  ctx.strokeStyle = colors.thumbBorder;
   ctx.lineWidth = Math.max(1, scale);
   roundRect(ctx, x, y, size, size, radius);
   ctx.stroke();
@@ -366,21 +365,21 @@ function attachButtonWidth(ctx, scene, attachCount) {
 }
 
 function drawAttachButton(ctx, scene, x, y, attachCount) {
-  const { m } = scene;
+  const { m, colors } = scene;
   const w = attachButtonWidth(ctx, scene, attachCount);
   const active = attachCount > 0;
 
   if (active) {
-    ctx.fillStyle = COLORS.accentDim;
+    ctx.fillStyle = colors.accentDim;
     roundRect(ctx, x, y, w, m.control, m.pillRadius);
     ctx.fill();
   }
-  ctx.strokeStyle = active ? COLORS.accent : COLORS.panelBorder;
+  ctx.strokeStyle = active ? colors.accent : colors.controlBorder;
   ctx.lineWidth = Math.max(1, scene.scale);
   roundRect(ctx, x, y, w, m.control, m.pillRadius);
   ctx.stroke();
 
-  const color = active ? COLORS.accent : COLORS.dim;
+  const color = active ? colors.accent : colors.dim;
   const iconX = active ? x + m.pillPadLeft : x + (m.control - m.iconSize) / 2;
   drawIcon(
     ctx,
@@ -402,19 +401,19 @@ function drawAttachButton(ctx, scene, x, y, attachCount) {
 }
 
 function drawModelChip(ctx, scene, x, y) {
-  const { m } = scene;
+  const { m, colors } = scene;
   if (!scene.modelChip) return;
   ctx.font = scene.fontChip;
   const labelW = ctx.measureText(scene.modelChip).width;
   const chevron = m.chevronSize;
   const w = m.chipPadX * 2 + labelW + m.pillGap + chevron;
 
-  ctx.strokeStyle = COLORS.panelBorder;
+  ctx.strokeStyle = colors.controlBorder;
   ctx.lineWidth = Math.max(1, scene.scale);
   roundRect(ctx, x, y, w, m.control, m.chipRadius);
   ctx.stroke();
 
-  ctx.fillStyle = COLORS.dim;
+  ctx.fillStyle = colors.dim;
   ctx.textAlign = 'left';
   ctx.textBaseline = 'middle';
   ctx.fillText(scene.modelChip, x + m.chipPadX, y + m.control / 2);
@@ -424,7 +423,7 @@ function drawModelChip(ctx, scene, x, y) {
     x + m.chipPadX + labelW + m.pillGap,
     y + (m.control - chevron) / 2,
     chevron,
-    COLORS.dim,
+    colors.dim,
     2.4
   );
 }
@@ -432,11 +431,10 @@ function drawModelChip(ctx, scene, x, y) {
 // The send button: accent once there is something to send, and a spinner from
 // the moment it is pressed — the same two states the DOM button has.
 function drawSendButton(ctx, scene, x, y, state, attachCount) {
-  const { m } = scene;
+  const { m, colors } = scene;
   const live = state.text.trim().length > 0 || attachCount > 0;
-  ctx.fillStyle = live ? COLORS.accent : COLORS.sendOffBg;
-  ctx.beginPath();
-  ctx.arc(x + m.control / 2, y + m.control / 2, m.control / 2, 0, Math.PI * 2);
+  ctx.fillStyle = live ? colors.accent : colors.sendOffBg;
+  roundRect(ctx, x, y, m.control, m.control, m.sendRadius);
   ctx.fill();
 
   if (state.sending) {
@@ -446,7 +444,8 @@ function drawSendButton(ctx, scene, x, y, state, attachCount) {
       y + m.control / 2,
       m.sendIconSize / 2,
       scene.scale,
-      state.ms
+      state.ms,
+      colors.sendOnFg
     );
     return;
   }
@@ -456,7 +455,7 @@ function drawSendButton(ctx, scene, x, y, state, attachCount) {
     x + (m.control - m.sendIconSize) / 2,
     y + (m.control - m.sendIconSize) / 2,
     m.sendIconSize,
-    live ? '#000000' : COLORS.sendOffFg,
+    live ? colors.sendOnFg : colors.sendOffFg,
     2.5
   );
 }
@@ -465,15 +464,16 @@ function drawSendButton(ctx, scene, x, y, state, attachCount) {
 // every 700ms (src/shared/components/Spinner.jsx, --animate-klb-spin).
 const SPIN_PERIOD_MS = 700;
 
-function drawSpinner(ctx, cx, cy, radius, scale, ms) {
+function drawSpinner(ctx, cx, cy, radius, scale, ms, color) {
   const angle = ((ms % SPIN_PERIOD_MS) / SPIN_PERIOD_MS) * Math.PI * 2;
   ctx.save();
   ctx.lineWidth = 2 * scale;
-  ctx.strokeStyle = 'rgba(0, 0, 0, 0.25)';
+  ctx.strokeStyle = color;
+  ctx.globalAlpha = 0.25;
   ctx.beginPath();
   ctx.arc(cx, cy, radius, 0, Math.PI * 2);
   ctx.stroke();
-  ctx.strokeStyle = '#000000';
+  ctx.globalAlpha = 1;
   ctx.lineCap = 'round';
   ctx.beginPath();
   ctx.arc(cx, cy, radius, angle, angle + Math.PI / 2);

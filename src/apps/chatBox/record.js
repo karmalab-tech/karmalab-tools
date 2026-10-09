@@ -74,6 +74,8 @@ async function pickTracks(width, height, fps, bitrate, wantsAudio) {
 export async function recordChatBox({
   width,
   height,
+  design,
+  layoutWidth,
   boxWidthPct,
   background,
   headline,
@@ -90,7 +92,7 @@ export async function recordChatBox({
   if (!videoSupport()) throw new Error('This browser cannot encode video.');
 
   onProgress({ stage: 'preparing', done: 0, total: plan.frameCount });
-  await ensureFonts();
+  await ensureFonts(design);
   const images = await decodeAttachments(attachments);
 
   const canvas = document.createElement('canvas');
@@ -101,6 +103,8 @@ export async function recordChatBox({
   const scene = buildScene(ctx, {
     width,
     height,
+    design,
+    layoutWidth,
     boxWidthPct,
     background,
     headline,

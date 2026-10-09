@@ -27,9 +27,13 @@ import { ChatBox } from './chatBox/ChatBox.jsx';
 import {
   DEFAULT_HEADLINE,
   DEFAULT_LAYOUT_WIDTH,
+  DESIGNS,
+  DESIGN_IDS,
   DEFAULT_MODEL_CHIP,
   DEFAULT_PLACEHOLDER,
   LAYOUT_WIDTH_LIMITS,
+  normalizeDesign,
+  resolveDesign,
 } from './chatBox/design.js';
 import {
   BOX_WIDTH_LIMITS,
@@ -75,6 +79,7 @@ import { loadKey, saveKey, storage } from './chatBox/storage.js';
 // back framed. Attachments are not: image data URIs have no business in
 // localStorage (see src/shared/runs.js).
 const SETTING_KEYS = [
+  'design',
   'text',
   'width',
   'height',
@@ -97,6 +102,7 @@ const SETTING_KEYS = [
 ];
 
 const INITIAL = {
+  design: 'karma',
   text: 'Make me a video of a golden retriever surfing at sunset',
   width: '1080',
   height: '1920',
@@ -410,6 +416,15 @@ export default function ChatBoxStudio() {
     saveKey(key, value);
   }
 
+  // A design brings its own backdrop (Claude's is warm grey, ChatGPT's black),
+  // so picking one sets the background too — it stays editable after.
+  function chooseDesign(id) {
+    set('design', id);
+    set('background', resolveDesign(id).colors.bg);
+  }
+
+  const design = normalizeDesign(settings.design);
+
   const soundChoice = normalizeChoice(settings.soundChoice);
   // What the recording will be laid over: the built-in sequences, one clip of
   // your own, or nothing at all.
@@ -673,6 +688,7 @@ export default function ChatBoxStudio() {
       const result = await recordChatBox({
         width,
         height,
+        design,
         layoutWidth,
         boxWidthPct,
         background: settings.background,
@@ -758,6 +774,7 @@ export default function ChatBoxStudio() {
                   placeholder={settings.placeholder}
                   modelChip={settings.modelChip}
                   headline={settings.headline}
+                  design={design}
                   sending={!!preview?.sending}
                   readOnly={!!preview || recording}
                 />
@@ -902,6 +919,29 @@ export default function ChatBoxStudio() {
         </Panel>
 
         <Panel title="The box">
+          <div className={FIELD}>
+            <label className={LABEL} htmlFor="designSelect">
+              Design
+            </label>
+            <select
+              id="designSelect"
+              className={SELECT}
+              style={SELECT_CHEVRON}
+              value={design}
+              onChange={(e) => chooseDesign(e.target.value)}
+              disabled={recording}
+            >
+              {DESIGN_IDS.map((id) => (
+                <option key={id} value={id}>
+                  {DESIGNS[id].label}
+                </option>
+              ))}
+            </select>
+            <div className={FIELD_HELP}>
+              Claude and ChatGPT borrow their colours, type and shape — the box keeps its own
+              elements. Picking one also sets the background.
+            </div>
+          </div>
           <div className={FIELD}>
             <label className={LABEL} htmlFor="headlineInput">
               Title above the box

@@ -9,6 +9,26 @@
 
 @import 'tailwindcss';
 
+/*
+ * Anthropic's typefaces, for the Chat Box Studio's Claude design. They are
+ * declared everywhere but fetched only by a page that sets text in them.
+ */
+@font-face {
+  font-family: 'Anthropic Sans';
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+  src: url('./fonts/AnthropicSans-Regular.otf') format('opentype');
+}
+
+@font-face {
+  font-family: 'Anthropic Serif';
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+  src: url('./fonts/AnthropicSerif-Regular.otf') format('opentype');
+}
+
 @theme {
   --color-bg: #000000;
   --color-panel: #171717;

@@ -67,7 +67,15 @@ import {
   recordingBasename,
   sceneScale,
 } from '../src/apps/chatBox/scene.js';
-import { DEFAULT_LAYOUT_WIDTH, METRICS } from '../src/apps/chatBox/design.js';
+import {
+  COLORS,
+  DEFAULT_DESIGN,
+  DEFAULT_LAYOUT_WIDTH,
+  DESIGN_IDS,
+  METRICS,
+  normalizeDesign,
+  resolveDesign,
+} from '../src/apps/chatBox/design.js';
 import {
   MERGE_GAP_MS,
   RUN_TAIL_MS,
@@ -1465,8 +1473,66 @@ describe('the chat box and its painter', () => {
       'headlineGap',
       'shadowBlur',
       'shadowOffsetY',
+      'sendRadius',
     ].forEach((key) => {
       expect(Number.isFinite(METRICS[key])).toBe(true);
     });
+  });
+});
+
+describe('the chat box designs', () => {
+  it('ships KarmaLab, Claude and ChatGPT, KarmaLab first', () => {
+    expect(DESIGN_IDS).toEqual(['karma', 'claude', 'chatgpt']);
+    expect(DEFAULT_DESIGN).toBe('karma');
+  });
+
+  it('falls back to the default for an id it does not know', () => {
+    expect(normalizeDesign('claude')).toBe('claude');
+    expect(normalizeDesign('gemini')).toBe(DEFAULT_DESIGN);
+    expect(normalizeDesign(undefined)).toBe(DEFAULT_DESIGN);
+    expect(resolveDesign('gemini').id).toBe(DEFAULT_DESIGN);
+  });
+
+  it('resolves every design to a full palette, metric set and set of fonts', () => {
+    DESIGN_IDS.forEach((id) => {
+      const design = resolveDesign(id);
+      // Nothing the painter reads may be missing: a design lists only what it
+      // changes, so the rest has to come through from the KarmaLab base.
+      Object.keys(COLORS).forEach((key) => expect(design.colors[key]).toBeTruthy());
+      Object.keys(METRICS).forEach((key) =>
+        expect(Number.isFinite(design.metrics[key])).toBe(true)
+      );
+      ['text', 'chip', 'headline'].forEach((key) => expect(design.fonts[key]).toBeTruthy());
+      expect(design.fontSpecs).toHaveLength(3);
+    });
+  });
+
+  it('leaves the KarmaLab design exactly as it was', () => {
+    const karma = resolveDesign('karma');
+    expect(karma.colors).toEqual(COLORS);
+    expect(karma.metrics).toEqual(METRICS);
+  });
+
+  it('sets Claude in Anthropic Sans with a serif title, and ChatGPT in the system font', () => {
+    const claude = resolveDesign('claude');
+    expect(claude.fonts.text).toContain('Anthropic Sans');
+    expect(claude.fonts.headline).toContain('Anthropic Serif');
+    expect(claude.fontSpecs.some((spec) => spec.includes('Anthropic Serif'))).toBe(true);
+    const chatgpt = resolveDesign('chatgpt');
+    expect(chatgpt.fonts.text).toMatch(/^system-ui/);
+    expect(chatgpt.fonts.text).not.toContain('Space Grotesk');
+  });
+
+  it('gives Claude orange on grey and ChatGPT blue on black', () => {
+    expect(resolveDesign('claude').colors.accent).toBe('#cc7c5e');
+    expect(resolveDesign('claude').colors.bg).toBe('#151515');
+    expect(resolveDesign('chatgpt').colors.accent).toBe('#3c66bf');
+    expect(resolveDesign('chatgpt').colors.bg).toBe('#000000');
+  });
+
+  it('draws the borrowed designs without outlines on the controls', () => {
+    expect(resolveDesign('karma').colors.controlBorder).not.toBe('transparent');
+    expect(resolveDesign('claude').colors.controlBorder).toBe('transparent');
+    expect(resolveDesign('chatgpt').colors.controlBorder).toBe('transparent');
   });
 });

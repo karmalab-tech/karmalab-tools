@@ -18,6 +18,16 @@
 // 1.26× and you get a desktop window shrunk into a reel, which is not what
 // anybody wants to watch on a phone.
 
+// A DESIGN is a look for the box: colours, fonts and the handful of metrics that
+// make one composer feel different from another (corner radius, the send
+// button's shape, how big the title is). Three ship — KarmaLab's own, and the
+// colours, type and shape of Claude's and ChatGPT's composers (not their
+// elements: the box is still this box, with the same attach button, chip and
+// send button). COLORS, FONT_* and METRICS below are the KarmaLab design and the
+// base every other design overrides, so a design only lists what it changes.
+// Both renderers take the chosen design from `resolveDesign()`; nothing outside
+// this file knows what any of them look like.
+
 export const COLORS = {
   // The KarmaLab tokens from src/shared/theme.css. Canvas has no CSS variables,
   // so the values are repeated here rather than read from the stylesheet.
@@ -31,6 +41,12 @@ export const COLORS = {
   // The send button before there is anything to send.
   sendOffBg: '#3a3a3a',
   sendOffFg: '#6a6a6a',
+  // The arrow (or spinner) on the send button once there is something to send.
+  sendOnFg: '#000000',
+  // The attach button and the chip: their outline, and the outline under the
+  // pointer. A design with borderless controls makes the first transparent.
+  controlBorder: '#2a2a2a',
+  controlHover: '#4a4a4a',
   thumbBg: '#000000',
   thumbBorder: '#3a3a3a',
   shadow: 'rgba(0, 0, 0, 0.45)',
@@ -46,6 +62,10 @@ export const FONT_SPECS = [
   `400 46px ${FONT_SANS}`,
   `400 13px ${FONT_MONO}`,
 ];
+
+// Which face each part of the box is set in: the message and its placeholder,
+// the small text on the attach button and the chip, and the title above it.
+const FONTS = { text: FONT_SANS, chip: FONT_MONO, headline: FONT_SANS };
 
 // The screen the box is laid out on, in CSS pixels: a phone, by default, which
 // is what a reel is watched on.
@@ -76,6 +96,8 @@ export const METRICS = {
   thumbGap: 8,
   control: 34,
   pillRadius: 17,
+  // The send button's corner radius: half of `control` is a circle.
+  sendRadius: 17,
   chipFontSize: 13,
   chipRadius: 16,
   chipPadX: 12,
@@ -109,3 +131,113 @@ export const ICONS = {
 export const DEFAULT_PLACEHOLDER = 'How can I help you today?';
 export const DEFAULT_HEADLINE = 'Hi Karma!';
 export const DEFAULT_MODEL_CHIP = 'Labrador 4.6';
+
+// ----- designs -------------------------------------------------------------
+
+// Anthropic's faces ship with the app (src/shared/theme.css declares them), so
+// the box and the canvas both have them. ChatGPT is set in the system's UI font,
+// which is what chatgpt.com does too.
+const ANTHROPIC_SANS = "'Anthropic Sans', system-ui, sans-serif";
+const ANTHROPIC_SERIF = "'Anthropic Serif', Georgia, serif";
+const SYSTEM_UI =
+  "system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif";
+
+// Colours were sampled from a dark-mode screenshot of each product's composer.
+export const DESIGNS = {
+  karma: {
+    label: 'KarmaLab',
+    colors: {},
+    fonts: {},
+    metrics: {},
+  },
+  claude: {
+    label: 'Claude',
+    // Warm greys and the orange of its spark. The controls have no outline.
+    colors: {
+      bg: '#151515',
+      panel: '#20201f',
+      panelBorder: '#363635',
+      text: '#f0efec',
+      dim: '#898782',
+      accent: '#cc7c5e',
+      accentDim: 'rgba(204, 124, 94, 0.14)',
+      sendOffBg: '#363635',
+      sendOffFg: '#898782',
+      sendOnFg: '#ffffff',
+      controlBorder: 'transparent',
+      controlHover: '#404040',
+      thumbBorder: '#363635',
+      shadow: 'rgba(0, 0, 0, 0.28)',
+    },
+    fonts: { text: ANTHROPIC_SANS, chip: ANTHROPIC_SANS, headline: ANTHROPIC_SERIF },
+    // A softer, squarer composer and a rounded-square send button; the title is
+    // the serif and wants room.
+    metrics: {
+      radius: 22,
+      pillRadius: 9,
+      chipRadius: 9,
+      sendRadius: 9,
+      chipFontSize: 14,
+      headlineFontSize: 42,
+      headlineGap: 34,
+      shadowBlur: 24,
+      shadowOffsetY: 4,
+    },
+  },
+  chatgpt: {
+    label: 'ChatGPT',
+    // Black, a charcoal pill and a blue send button. The controls have no outline.
+    colors: {
+      bg: '#000000',
+      panel: '#1b1b1b',
+      panelBorder: '#292929',
+      text: '#ededed',
+      dim: '#afafaf',
+      accent: '#3c66bf',
+      accentDim: 'rgba(60, 102, 191, 0.16)',
+      sendOffBg: '#303030',
+      sendOffFg: '#8a8a8a',
+      sendOnFg: '#ffffff',
+      controlBorder: 'transparent',
+      controlHover: '#3a3a3a',
+      thumbBorder: '#292929',
+      shadow: 'rgba(0, 0, 0, 0)',
+    },
+    fonts: { text: SYSTEM_UI, chip: SYSTEM_UI, headline: SYSTEM_UI },
+    // A pill that stays a pill as it grows: a radius that big reads round on a
+    // box this short.
+    metrics: {
+      radius: 30,
+      padLeft: 22,
+      pillRadius: 17,
+      chipRadius: 17,
+      chipFontSize: 14,
+      headlineFontSize: 36,
+      headlineGap: 30,
+    },
+  },
+};
+
+export const DESIGN_IDS = Object.keys(DESIGNS);
+export const DEFAULT_DESIGN = 'karma';
+
+// An unknown id (a setting left over from a design that no longer exists) is the
+// default design rather than an error.
+export const normalizeDesign = (id) => (DESIGNS[id] ? id : DEFAULT_DESIGN);
+
+// A design with everything filled in from the KarmaLab base: what the DOM box
+// and the painter actually read. `fontSpecs` is what the canvas has to have
+// loaded before the first frame — a face that is not loaded falls back silently.
+export function resolveDesign(id) {
+  const key = normalizeDesign(id);
+  const design = DESIGNS[key];
+  const colors = { ...COLORS, ...design.colors };
+  const fonts = { ...FONTS, ...design.fonts };
+  const metrics = { ...METRICS, ...design.metrics };
+  const fontSpecs = [
+    `400 ${metrics.fontSize}px ${fonts.text}`,
+    `400 ${metrics.headlineFontSize}px ${fonts.headline}`,
+    `400 ${metrics.chipFontSize}px ${fonts.chip}`,
+  ];
+  return { id: key, label: design.label, colors, fonts, metrics, fontSpecs };
+}
