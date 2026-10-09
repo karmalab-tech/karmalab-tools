@@ -24,6 +24,7 @@ import { cachedBlob } from '../shared/outputCache.js';
 import { useCachedOutput } from '../shared/useCachedOutput.js';
 import { useGenerationRun } from '../shared/useGenerationRun.js';
 import { ChatBox } from './chatBox/ChatBox.jsx';
+import { appIconFor } from './chatBox/appIcons.js';
 import {
   DEFAULT_HEADLINE,
   DEFAULT_LAYOUT_WIDTH,
@@ -80,6 +81,7 @@ import { loadKey, saveKey, storage } from './chatBox/storage.js';
 // localStorage (see src/shared/runs.js).
 const SETTING_KEYS = [
   'design',
+  'showIcon',
   'text',
   'width',
   'height',
@@ -103,6 +105,7 @@ const SETTING_KEYS = [
 
 const INITIAL = {
   design: 'karma',
+  showIcon: '0',
   text: 'Make me a video of a golden retriever surfing at sunset',
   width: '1080',
   height: '1920',
@@ -424,6 +427,8 @@ export default function ChatBoxStudio() {
   }
 
   const design = normalizeDesign(settings.design);
+  // Off unless asked for, and only for a design that has an icon to show.
+  const iconUrl = settings.showIcon === '1' ? appIconFor(design) : null;
 
   const soundChoice = normalizeChoice(settings.soundChoice);
   // What the recording will be laid over: the built-in sequences, one clip of
@@ -695,6 +700,7 @@ export default function ChatBoxStudio() {
         headline: settings.headline,
         placeholder: settings.placeholder,
         modelChip: settings.modelChip,
+        appIconUrl: iconUrl,
         attachments,
         clips,
         plan,
@@ -758,6 +764,19 @@ export default function ChatBoxStudio() {
                 background: settings.background,
               }}
             >
+              {iconUrl && (
+                <img
+                  src={iconUrl}
+                  alt=""
+                  className="absolute left-1/2 block"
+                  style={{
+                    width: resolveDesign(design).metrics.appIconSize * boxScale,
+                    height: resolveDesign(design).metrics.appIconSize * boxScale,
+                    top: resolveDesign(design).metrics.appIconTop * boxScale,
+                    transform: 'translateX(-50%)',
+                  }}
+                />
+              )}
               <div
                 className="absolute left-1/2 top-1/2"
                 style={{
@@ -941,6 +960,25 @@ export default function ChatBoxStudio() {
               Claude and ChatGPT borrow their colours, type and shape — the box keeps its own
               elements. Picking one also sets the background.
             </div>
+          </div>
+          <div className={FIELD}>
+            <label
+              className={`flex items-center gap-2.5 text-[13.5px] ${
+                appIconFor(design) ? 'cursor-pointer' : 'opacity-50'
+              }`}
+            >
+              <input
+                type="checkbox"
+                className="accent-accent w-4 h-4"
+                checked={settings.showIcon === '1'}
+                disabled={recording || !appIconFor(design)}
+                onChange={(e) => set('showIcon', e.target.checked ? '1' : '0')}
+              />
+              Show the app icon at the top
+            </label>
+            {!appIconFor(design) && (
+              <div className={FIELD_HELP}>KarmaLab has no icon — pick Claude or ChatGPT.</div>
+            )}
           </div>
           <div className={FIELD}>
             <label className={LABEL} htmlFor="headlineInput">

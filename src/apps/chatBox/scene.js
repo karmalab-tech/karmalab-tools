@@ -147,6 +147,9 @@ export function buildScene(ctx, options) {
     placeholder = '',
     modelChip = '',
     attachments = [],
+    // A decoded image (ImageBitmap or HTMLImageElement) to show at the top of the
+    // frame, or none.
+    appIcon = null,
     finalText = '',
   } = options;
 
@@ -175,6 +178,7 @@ export function buildScene(ctx, options) {
     placeholder,
     modelChip,
     attachments,
+    appIcon,
     fontText: `${m.fontSize}px ${fonts.text}`,
     fontChip: `${m.chipFontSize}px ${fonts.chip}`,
     fontHeadline: `${m.headlineFontSize}px ${fonts.headline}`,
@@ -234,6 +238,17 @@ export function paintFrame(ctx, scene, state) {
   ctx.save();
   ctx.fillStyle = scene.background;
   ctx.fillRect(0, 0, width, height);
+
+  if (scene.appIcon) {
+    // Rounded on its own (the files carry their transparent corners).
+    ctx.drawImage(
+      scene.appIcon,
+      (width - m.appIconSize) / 2,
+      m.appIconTop,
+      m.appIconSize,
+      m.appIconSize
+    );
+  }
 
   if (scene.headline) {
     ctx.font = scene.fontHeadline;

@@ -67,6 +67,7 @@ import {
   recordingBasename,
   sceneScale,
 } from '../src/apps/chatBox/scene.js';
+import { appIconFor } from '../src/apps/chatBox/appIcons.js';
 import {
   COLORS,
   DEFAULT_DESIGN,
@@ -1474,6 +1475,8 @@ describe('the chat box and its painter', () => {
       'shadowBlur',
       'shadowOffsetY',
       'sendRadius',
+      'appIconSize',
+      'appIconTop',
     ].forEach((key) => {
       expect(Number.isFinite(METRICS[key])).toBe(true);
     });
@@ -1528,6 +1531,12 @@ describe('the chat box designs', () => {
     expect(resolveDesign('claude').colors.bg).toBe('#151515');
     expect(resolveDesign('chatgpt').colors.accent).toBe('#3c66bf');
     expect(resolveDesign('chatgpt').colors.bg).toBe('#000000');
+  });
+
+  it('has an app icon for Claude and ChatGPT and none for KarmaLab', () => {
+    expect(appIconFor('claude')).toBeTruthy();
+    expect(appIconFor('chatgpt')).toBeTruthy();
+    expect(appIconFor('karma')).toBeNull();
   });
 
   it('draws the borrowed designs without outlines on the controls', () => {

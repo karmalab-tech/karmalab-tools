@@ -109,6 +109,10 @@ export const METRICS = {
   iconSize: 16,
   sendIconSize: 16,
   chevronSize: 10,
+  // The app icon some designs show at the top of the frame, centred: its size
+  // and its distance from the top edge.
+  appIconSize: 56,
+  appIconTop: 64,
   headlineFontSize: 46,
   headlineGap: 32,
   shadowBlur: 40,
