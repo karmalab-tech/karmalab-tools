@@ -69,7 +69,7 @@ def ffprobe(path):
                           'stream=width,height:format=duration', '-of', 'json', path],
                          capture_output=True, text=True, check=True).stdout
     j = json.loads(out)
-    return j['streams'][0]['width'], j['streams'][0]['height'], float(j['format']['duration'])
+    return j['streams'][0]['width'], j['streams'][0]['height'], float(j['format'].get('duration') or 0)
 
 
 def estimate_edit(params):
