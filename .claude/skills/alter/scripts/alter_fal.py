@@ -172,7 +172,15 @@ def cmd_finalize(a):
     return 0
 
 
+ASPECTS = {'21:9': 21 / 9, '16:9': 16 / 9, '3:2': 3 / 2, '4:3': 4 / 3, '5:4': 5 / 4, '1:1': 1.0, '4:5': 4 / 5,
+           '3:4': 3 / 4, '2:3': 2 / 3, '9:16': 9 / 16}
+
+
 def cmd_frame(a):
+    if a.aspect == 'auto' and os.path.exists(a.image[0]):
+        # "auto" follows the reference photos, not the shot: pin the shape of the first image (the source frame)
+        w, h, _ = ffprobe(a.image[0])
+        a.aspect = min(ASPECTS, key=lambda k: abs(ASPECTS[k] - w / h))
     args = {'prompt': a.prompt, 'image_urls': a.image, 'num_images': a.num, 'resolution': a.resolution,
             'aspect_ratio': a.aspect, 'output_format': 'png'}
     print(f'endpoint: {IMAGE}\nprompt: {a.prompt}\ninputs: {a.image}  x{a.num} at {a.resolution}')
@@ -264,7 +272,7 @@ def main():
     p.add_argument('--prompt', required=True)
     p.add_argument('--num', type=int, default=2)
     p.add_argument('--resolution', default='2K', choices=['1K', '2K', '4K'])
-    p.add_argument('--aspect', default='auto')
+    p.add_argument('--aspect', default='auto', help='default: the shape of the first --image (the source frame)')
     p.add_argument('--out', required=True)
     common(p)
     p.set_defaults(fn=cmd_frame)
