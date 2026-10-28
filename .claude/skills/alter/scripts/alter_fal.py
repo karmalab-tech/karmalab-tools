@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""The ALTER model steps on fal.ai: edit (draft), finalise, target frame, ambience.
+"""The ALTER model steps on fal.ai: edit (draft), finalise, target frame, ambience, character replace.
 
 Needs `pip install fal-client` and a key in FAL_KEY (FAL_AI_API_KEY is accepted too). The key is never printed.
 
@@ -9,6 +9,7 @@ Every command that spends money prints what it would send and a price estimate, 
   python3 alter_fal.py finalize --draft draft.mp4 --out final.mov [--go]     # or --draft-id ID
   python3 alter_fal.py frame --image frame.png [--image sheet.png] --prompt "..." --num 2 --out target.png [--go]
   python3 alter_fal.py sound --text "..." --seconds 9 --loop --out bed.mp3 [--go]
+  python3 alter_fal.py replace --video prepared.mp4 --image character.png --prompt "..." --out replaced.mp4 [--go]
 
 `run` and `finalize` write <out>.json next to the video (the draft_id, the seed, the endpoint). A draft is valid for
 seven days and only for the account that made it.
@@ -24,6 +25,10 @@ EDIT = 'bytedance/seedance-2.5/reference-to-video'
 COMPLETE = 'bytedance/seedance-2.5/draft/complete'
 IMAGE = 'fal-ai/nano-banana-pro/edit'
 SOUND = 'fal-ai/elevenlabs/sound-effects/v2'
+# Not Seedance: Alibaba's Wan 2.2 Animate swaps the person in a clip for the character in one image. Its own rules.
+REPLACE = 'fal-ai/wan/v2.2-14b/animate/replace'
+# fal's listed price per "video second" (frames / 16), by output resolution
+REPLACE_PER_SECOND = {'480p': 0.04, '580p': 0.06, '720p': 0.08}
 # fal's published figure for a 1080p finalise, per second of output (about 0.6x of that when a video is an input)
 COMPLETE_PER_SECOND = 1.164
 
@@ -184,6 +189,37 @@ def cmd_frame(a):
     return 0
 
 
+def cmd_replace(a):
+    args = {'prompt': a.prompt, 'video_url': a.video, 'image_url': a.image}
+    if a.turbo:
+        args['use_turbo'] = True
+    for k in ('video_url', 'image_url'):
+        if not os.path.exists(args[k]) and not args[k].startswith('http'):
+            raise SystemExit(f'{args[k]}: file not found')
+    print(f'endpoint: {REPLACE}\nprompt: {a.prompt}\ninputs: {({k: v for k, v in args.items() if k != "prompt"})}')
+    if os.path.exists(a.video):
+        probe = subprocess.run(['ffprobe', '-v', 'error', '-select_streams', 'v:0', '-count_frames', '-show_entries',
+                                'stream=nb_read_frames,r_frame_rate', '-of', 'json', a.video],
+                               capture_output=True, text=True, check=True).stdout
+        st = json.loads(probe)['streams'][0]
+        billed = int(st['nb_read_frames']) / 16
+        print(f'price: {billed:.1f} billed seconds (frames / 16); ' + ', '.join(
+            f'${billed * r:.2f} at {k}' for k, r in REPLACE_PER_SECOND.items()) + " (fal's listed rates; the output size is the model's)")
+    else:
+        say_price('this replace', None)
+    if not a.go:
+        print('dry run: nothing sent. Add --go to run it.')
+        return 0
+    fc = client()
+    for k in ('video_url', 'image_url'):
+        args[k] = upload_local(fc, [args[k]])[0]
+    res = run_endpoint(fc, REPLACE, args)
+    fetch(res['video']['url'], a.out, a.force)
+    sidecar(a.out, {'endpoint': REPLACE, 'seed': res.get('seed')})
+    print(f'wrote {a.out}')
+    return 0
+
+
 def cmd_sound(a):
     args = {'text': a.text, 'loop': a.loop, 'output_format': 'mp3_44100_128'}
     if a.seconds:
@@ -238,6 +274,15 @@ def main():
     p.add_argument('--out', required=True)
     common(p)
     p.set_defaults(fn=cmd_sound)
+
+    p = sub.add_parser('replace', help='swap the person in the clip for the character in one image (Wan 2.2 Animate)')
+    p.add_argument('--video', required=True)
+    p.add_argument('--image', required=True)
+    p.add_argument('--prompt', required=True)
+    p.add_argument('--turbo', action='store_true', help="fal's use_turbo toggle")
+    p.add_argument('--out', required=True)
+    common(p)
+    p.set_defaults(fn=cmd_replace)
 
     a = ap.parse_args()
     return a.fn(a)
