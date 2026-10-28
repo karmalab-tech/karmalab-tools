@@ -51,6 +51,8 @@ def client():
 
 def unit_price(endpoint):
     """fal's listed unit price for an endpoint, or None. Best effort; never blocks a run."""
+    if not os.environ.get('FAL_KEY') and os.environ.get('FAL_AI_API_KEY'):
+        os.environ['FAL_KEY'] = os.environ['FAL_AI_API_KEY']
     try:
         req = urllib.request.Request(
             f'https://api.fal.ai/v1/models/pricing?endpoint_id={endpoint}',
